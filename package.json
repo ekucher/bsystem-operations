@@ -1,0 +1,14 @@
+{
+  "name": "bsystem-operations",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "api",
+    "ui"
+  ],
+  "scripts": {
+    "typecheck": "npm run typecheck --workspace=api && npm run typecheck --workspace=ui",
+    "build": "npm run build --workspace=api && npm run build --workspace=ui",
+    "test": "npm run test --workspace=api && npm run test --workspace=ui"
+  }
+}
