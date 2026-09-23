@@ -16,11 +16,14 @@ components:
       in: header
       name: X-Bootstrap-Secret
       description: Видається адміністратором Operations разом з увімкненням opt-in на сервері.
-    adminKey:
+    sessionCookie:
       type: apiKey
-      in: header
-      name: X-Admin-Key
-      description: Інтерим v1 admin-автентифікація (Etap 3 замінить на локальні акаунти + RBAC).
+      in: cookie
+      name: ops_session
+      description: >
+        Etap 3: httpOnly-сесія локального облікового запису, видається
+        POST /auth/login. Роль (admin|viewer) визначає доступ —
+        approve вимагає admin, решта адмін-маршрутів доступні обом.
     apiKey:
       type: apiKey
       in: header
@@ -40,6 +43,9 @@ components:
     EventCategory:
       type: string
       enum: [backup, maintenance, health]
+    UserRole:
+      type: string
+      enum: [admin, viewer]
     ServiceStatusEntry:
       type: object
       required: [name, status]
@@ -67,6 +73,51 @@ components:
           additionalProperties: true
 
 paths:
+  /auth/login:
+    post:
+      summary: Вхід локальним обліковим записом (Etap 3). Немає self-registration — акаунти лише через CLI create-admin.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+      responses:
+        '200':
+          description: Вхід успішний, ops_session cookie встановлено
+        '400':
+          description: Невалідний запит
+        '401':
+          description: Невірний логін/пароль
+
+  /auth/logout:
+    post:
+      summary: Вихід — видаляє сесію та cookie
+      security:
+        - sessionCookie: []
+      responses:
+        '204':
+          description: Вихід виконано
+        '401':
+          description: Немає активної сесії
+
+  /auth/me:
+    get:
+      summary: Поточний обліковий запис (username + role)
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: username + role
+        '401':
+          description: Немає активної сесії
+
   /enroll:
     post:
       summary: Self-enrollment сервера (GUID + bootstrap-секрет)
@@ -123,18 +174,26 @@ paths:
 
   /admin/servers:
     get:
-      summary: Список усіх серверів (foundation для Etap 3 overview)
+      summary: >
+        Список усіх серверів для overview (Etap 3): кожен запис
+        збагачено isOnline (з last_heartbeat_at) і latestByCategory
+        (останній backup/maintenance/health-запис). Доступно admin і
+        viewer.
       security:
-        - adminKey: []
+        - sessionCookie: []
       responses:
         '200':
-          description: Масив серверів
+          description: Масив серверів + heartbeatExpectedIntervalMinutes/heartbeatMissedThreshold
+        '401':
+          description: Немає активної сесії
 
   /admin/servers/{serverId}:
     get:
-      summary: Деталі сервера + останні 200 подій (foundation для Etap 3 detailed-режиму)
+      summary: >
+        Деталі сервера для detail-режиму (Etap 3): останні 1000 подій,
+        latestByCategory, isOnline. Доступно admin і viewer.
       security:
-        - adminKey: []
+        - sessionCookie: []
       parameters:
         - name: serverId
           in: path
@@ -144,15 +203,17 @@ paths:
             format: uuid
       responses:
         '200':
-          description: Сервер і його події
+          description: Сервер, latestByCategory і його події
+        '401':
+          description: Немає активної сесії
         '404':
           description: Не знайдено
 
   /admin/servers/{serverId}/approve:
     post:
-      summary: Підтвердити pending-сервер, видати API-ключ
+      summary: Підтвердити pending-сервер, видати API-ключ. Лише роль admin.
       security:
-        - adminKey: []
+        - sessionCookie: []
       parameters:
         - name: serverId
           in: path
@@ -163,6 +224,10 @@ paths:
       responses:
         '200':
           description: Approved
+        '401':
+          description: Немає активної сесії
+        '403':
+          description: Сесія є, але роль не admin
         '404':
           description: Не знайдено
         '409':

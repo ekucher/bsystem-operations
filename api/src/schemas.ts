@@ -63,3 +63,16 @@ export const HeartbeatRequest = z.object({
   bravoVersion: z.string().optional(),
 });
 export type HeartbeatRequest = z.infer<typeof HeartbeatRequest>;
+
+// Etap 3: role — RBAC-поняття, окреме від джерела автентифікації
+// (v1 = local password_hash), щоб пізніше мігрувати на authentik OIDC,
+// не переписуючи авторизаційні перевірки. 'admin' = перегляд + approve
+// pending-серверів; 'viewer' = лише перегляд.
+export const UserRole = z.enum(['admin', 'viewer']);
+export type UserRole = z.infer<typeof UserRole>;
+
+export const LoginRequest = z.object({
+  username: z.string().min(1),
+  password: z.string().min(1),
+});
+export type LoginRequest = z.infer<typeof LoginRequest>;

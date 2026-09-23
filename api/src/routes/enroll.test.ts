@@ -1,8 +1,19 @@
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
-import { buildTestApp } from '../testUtils.js';
+import { buildTestApp, createTestUser } from '../testUtils.js';
+import type { OperationsRepository } from '../repository.js';
+import type { Express } from 'express';
 
 const SERVER_ID = '11111111-1111-4111-8111-111111111111';
+
+// Etap 3 replaced the interim X-Admin-Key with local-account sessions
+// (see auth.ts) — approve now requires a logged-in 'admin' user.
+async function loginAsAdmin(app: Express, repository: OperationsRepository): Promise<request.SuperAgentTest> {
+  createTestUser(repository, 'admin', 'test-password', 'admin');
+  const agent = request.agent(app);
+  await agent.post('/api/v1/auth/login').send({ username: 'admin', password: 'test-password' });
+  return agent;
+}
 
 function enrollBody(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -33,7 +44,8 @@ describe('enrollment flow', () => {
   });
 
   it('goes pending -> approved -> reveals the API key exactly once', async () => {
-    const { app } = buildTestApp();
+    const { app, repository } = buildTestApp();
+    const admin = await loginAsAdmin(app, repository);
 
     const enrollRes = await request(app).post('/api/v1/enroll').send(enrollBody());
     expect(enrollRes.status).toBe(202);
@@ -44,9 +56,7 @@ describe('enrollment flow', () => {
       .set('X-Bootstrap-Secret', 'test-bootstrap-secret');
     expect(pollBeforeApproval.body).toEqual({ status: 'pending' });
 
-    const approveRes = await request(app)
-      .post(`/api/v1/admin/servers/${SERVER_ID}/approve`)
-      .set('X-Admin-Key', 'test-admin-key');
+    const approveRes = await admin.post(`/api/v1/admin/servers/${SERVER_ID}/approve`);
     expect(approveRes.status).toBe(200);
     expect(approveRes.body).toEqual({ status: 'approved' });
 
@@ -65,40 +75,41 @@ describe('enrollment flow', () => {
   });
 
   it('re-enrolling an already-approved server does not reset it to pending', async () => {
-    const { app } = buildTestApp();
+    const { app, repository } = buildTestApp();
+    const admin = await loginAsAdmin(app, repository);
     await request(app).post('/api/v1/enroll').send(enrollBody());
-    await request(app).post(`/api/v1/admin/servers/${SERVER_ID}/approve`).set('X-Admin-Key', 'test-admin-key');
+    await admin.post(`/api/v1/admin/servers/${SERVER_ID}/approve`);
 
     const reEnroll = await request(app).post('/api/v1/enroll').send(enrollBody());
     expect(reEnroll.body).toEqual({ status: 'approved' });
   });
 
-  it('rejects approve attempts with the wrong admin key', async () => {
+  it('rejects approve attempts with no session', async () => {
     const { app } = buildTestApp();
     await request(app).post('/api/v1/enroll').send(enrollBody());
 
-    const res = await request(app)
-      .post(`/api/v1/admin/servers/${SERVER_ID}/approve`)
-      .set('X-Admin-Key', 'wrong');
+    const res = await request(app).post(`/api/v1/admin/servers/${SERVER_ID}/approve`);
     expect(res.status).toBe(401);
   });
 
-  it('fails closed when the admin key is not configured at all', async () => {
-    const { app } = buildTestApp({ adminApiKey: undefined });
-    const res = await request(app)
-      .post(`/api/v1/admin/servers/${SERVER_ID}/approve`)
-      .set('X-Admin-Key', 'anything');
-    expect(res.status).toBe(503);
+  it('rejects approve attempts from a viewer-role session', async () => {
+    const { app, repository } = buildTestApp();
+    createTestUser(repository, 'viewer', 'test-password', 'viewer');
+    const agent = request.agent(app);
+    await agent.post('/api/v1/auth/login').send({ username: 'viewer', password: 'test-password' });
+    await request(app).post('/api/v1/enroll').send(enrollBody());
+
+    const res = await agent.post(`/api/v1/admin/servers/${SERVER_ID}/approve`);
+    expect(res.status).toBe(403);
   });
 
   it('rejects approving a server that is already approved', async () => {
-    const { app } = buildTestApp();
+    const { app, repository } = buildTestApp();
+    const admin = await loginAsAdmin(app, repository);
     await request(app).post('/api/v1/enroll').send(enrollBody());
-    await request(app).post(`/api/v1/admin/servers/${SERVER_ID}/approve`).set('X-Admin-Key', 'test-admin-key');
+    await admin.post(`/api/v1/admin/servers/${SERVER_ID}/approve`);
 
-    const res = await request(app)
-      .post(`/api/v1/admin/servers/${SERVER_ID}/approve`)
-      .set('X-Admin-Key', 'test-admin-key');
+    const res = await admin.post(`/api/v1/admin/servers/${SERVER_ID}/approve`);
     expect(res.status).toBe(409);
   });
 });

@@ -10,16 +10,19 @@ Operations — модуль моніторингу флоту серверів B
 Версія v1, **standalone**: працює як окремий застосунок за власною
 адресою, без реєстрації в Module Registry BSYSTEM-HUB і без SSO через
 authentik — обидва ще не розгорнуті в продакшн. Автентифікація v1 —
-локальні облікові записи; міграція на authentik OIDC SSO та інтеграція з
-HUB заплановані окремим етапом після їхнього виходу в прод.
+локальні облікові записи (Etap 3); міграція на authentik OIDC SSO та
+інтеграція з HUB заплановані окремим етапом після їхнього виходу в прод.
 
 ## Структура репозиторію
 
 ```text
 api/   — backend (Node.js + TypeScript), REST API прийому подій від
          агентів BRAVO-Toolkit, зберігання стану/історії, GET /health
-ui/    — dashboard (React + TypeScript + Vite), overview- та
-         detailed-режими перегляду стану серверів
+ui/    — dashboard (React + TypeScript + Vite): login, overview
+         (лічильники + сортовний/фільтрований список ~50 серверів,
+         periodic polling, approve pending-серверів) і detail
+         (поточний стан backup/maintenance/health, статус 3 служб,
+         історія подій)
 ```
 
 Монорепозиторій навмисно поєднує backend і frontend цього модуля
@@ -35,30 +38,56 @@ npm test
 ```
 
 Локальний запуск обох частин разом — `docker-compose.yml` (потребує
-`OPERATIONS_BOOTSTRAP_SECRET`/`ADMIN_API_KEY` в оточенні, інакше
-використовує dev-заглушки — див. `docker-compose.yml`). Окремо `api/` —
-`api/.env.example` → `.env`, потім `npm run dev --workspace=api`.
+`OPERATIONS_BOOTSTRAP_SECRET` в оточенні, інакше використовує
+dev-заглушку — див. `docker-compose.yml`). Окремо `api/` —
+`api/.env.example` → `.env`, потім `npm run dev --workspace=api`. Перший
+обліковий запис створюється окремо через `npm run create-admin`
+(див. розділ "Автентифікація" нижче) — БД не має дефолтних облікових
+записів.
 
-## API (Etap 1)
+## API
 
-Контракт — `api/docs/openapi.yaml`. Потік self-enrollment:
+Контракт — `api/docs/openapi.yaml`. Потік self-enrollment (Etap 1):
 
 1. Агент генерує GUID, викликає `POST /api/v1/enroll` з
    `bootstrapSecret` → сервер отримує статус `pending`.
-2. Адміністратор підтверджує сервер:
-   `POST /api/v1/admin/servers/{id}/approve` (`X-Admin-Key`).
+2. Адміністратор підтверджує сервер у dashboard (approve-кнопка на
+   overview) або напряму `POST /api/v1/admin/servers/{id}/approve`
+   (сесія з роллю `admin`).
 3. Агент поллить `GET /api/v1/enroll/{id}` (`X-Bootstrap-Secret`) —
    API-ключ повертається **рівно один раз** одразу після approve
    (reveal-once).
 4. Далі агент відправляє `POST /api/v1/events` і `POST /api/v1/heartbeat`
    з `X-Api-Key`.
 
-`GET /api/v1/admin/servers` і `GET /api/v1/admin/servers/{id}` — дані для
-майбутнього dashboard (Etap 3). Історія подій зберігається 90 днів
-(`EVENT_RETENTION_DAYS`), старіші видаляються фоновою задачею.
+`GET /api/v1/admin/servers` і `GET /api/v1/admin/servers/{id}` (Etap 3) —
+збагачені дані для dashboard: `isOnline` (розраховується з
+`last_heartbeat_at` + `HEARTBEAT_EXPECTED_INTERVAL_MINUTES` ×
+`HEARTBEAT_MISSED_THRESHOLD`) і `latestByCategory` (останній
+backup/maintenance/health-запис на сервер). Історія подій зберігається
+90 днів (`EVENT_RETENTION_DAYS`), старіші видаляються фоновою задачею.
 
-Автентифікація адмін-маршрутів (`X-Admin-Key`) — інтерим-рішення v1;
-Etap 3 замінює її локальними обліковими записами з RBAC-роллю.
+## Автентифікація (Etap 3)
+
+Адмін-маршрути (`/api/v1/admin/*`, `/api/v1/auth/me`,
+`/api/v1/auth/logout`) вимагають сесії локального облікового запису —
+`httpOnly`-cookie `ops_session`, видається `POST /api/v1/auth/login`.
+Роль (`admin` | `viewer`) — окреме поле від джерела автентифікації, щоб
+пізніше мігрувати на authentik OIDC без переписування RBAC-перевірок;
+`viewer` бачить overview/detail, `admin` додатково може підтверджувати
+pending-сервери.
+
+Self-registration відсутня навмисно. Перший (і будь-який наступний)
+обліковий запис створюється CLI:
+
+```bash
+npm run create-admin --workspace=api -- --username <ім'я> --password <пароль> [--role admin|viewer]
+```
+
+Пароль зберігається як `scrypt`-хеш (`node:crypto`, без зовнішніх
+залежностей). Сесія живе `SESSION_TTL_HOURS` (дефолт 24) і завжди
+`Secure`-cookie, якщо явно не вимкнено `COOKIE_SECURE=false` (лише для
+локальної розробки по http).
 
 ## Пов'язані джерела
 

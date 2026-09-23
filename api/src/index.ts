@@ -10,10 +10,6 @@ if (!config.bootstrapSecret) {
   // eslint-disable-next-line no-console
   console.warn('OPERATIONS_BOOTSTRAP_SECRET not set — enrollment is disabled until it is configured.');
 }
-if (!config.adminApiKey) {
-  // eslint-disable-next-line no-console
-  console.warn('ADMIN_API_KEY not set — approval/admin routes are disabled until it is configured.');
-}
 
 const db = openDb(config.dbPath);
 const repository = new OperationsRepository(db);

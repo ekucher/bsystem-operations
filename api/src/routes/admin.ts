@@ -1,14 +1,13 @@
 import { Router } from 'express';
 import type { AppConfig } from '../config.js';
-import { requireAdmin } from '../auth.js';
+import { requireRole, requireSession } from '../auth.js';
 import { generateApiKey, hashSecret } from '../crypto.js';
+import { groupLatestEventsByServer, isServerOnline, parseEventPayload } from '../serverStatus.js';
 import type { OperationsRepository } from '../repository.js';
 
-// Interim v1 read/admin surface behind the shared admin key (see auth.ts
-// requireAdmin). Etap 3 replaces this auth model with per-user local
-// accounts and an RBAC role; these routes and their data shape are what
-// that UI will consume, so they are built now as part of the backend
-// contract rather than deferred alongside the UI itself.
+// Etap 3: local accounts + RBAC (see auth.ts) replace the interim v1
+// shared admin key. Viewer role gets read access; approve stays
+// admin-only.
 export function createAdminRouter(repository: OperationsRepository, config: AppConfig): Router {
   const router = Router();
   // Applied per-route rather than via a blanket router.use(): this router
@@ -16,23 +15,52 @@ export function createAdminRouter(repository: OperationsRepository, config: AppC
   // routers, and a path-less router.use() middleware runs for EVERY
   // request that reaches this router instance — including ones meant for
   // a sibling router's routes — not just the routes defined below it.
-  const admin = requireAdmin(config);
+  const authed = requireSession(repository);
+  const adminOnly = requireRole(repository, 'admin');
 
-  router.get('/admin/servers', admin, (_req, res) => {
-    res.status(200).json({ servers: repository.listServers() });
+  router.get('/admin/servers', authed, (_req, res) => {
+    const servers = repository.listServers();
+    const latestByServer = groupLatestEventsByServer(repository.listLatestEventPerCategoryForAllServers());
+    const now = new Date();
+    const enriched = servers.map((server) => ({
+      ...server,
+      isOnline: isServerOnline(server, now, config.heartbeatExpectedIntervalMinutes, config.heartbeatMissedThreshold),
+      latestByCategory: latestByServer.get(server.id) ?? {},
+    }));
+    res.status(200).json({
+      servers: enriched,
+      heartbeatExpectedIntervalMinutes: config.heartbeatExpectedIntervalMinutes,
+      heartbeatMissedThreshold: config.heartbeatMissedThreshold,
+    });
   });
 
-  router.get('/admin/servers/:serverId', admin, (req, res) => {
+  router.get('/admin/servers/:serverId', authed, (req, res) => {
     const server = repository.getServer(req.params.serverId);
     if (!server) {
       res.status(404).json({ error: 'not_found' });
       return;
     }
-    const events = repository.listRecentEvents(server.id, 200);
-    res.status(200).json({ server, events });
+    const events = repository.listRecentEvents(server.id, 1000);
+    const latestByCategoryRows = repository.listLatestEventPerCategory(server.id);
+    const latestByCategory: Record<string, unknown> = {};
+    for (const row of latestByCategoryRows) {
+      latestByCategory[row.category] = {
+        severity: row.severity,
+        createdAt: row.created_at,
+        payload: parseEventPayload(row.payload),
+      };
+    }
+    res.status(200).json({
+      server: {
+        ...server,
+        isOnline: isServerOnline(server, new Date(), config.heartbeatExpectedIntervalMinutes, config.heartbeatMissedThreshold),
+      },
+      latestByCategory,
+      events,
+    });
   });
 
-  router.post('/admin/servers/:serverId/approve', admin, (req, res) => {
+  router.post('/admin/servers/:serverId/approve', adminOnly, (req, res) => {
     const server = repository.getServer(req.params.serverId);
     if (!server) {
       res.status(404).json({ error: 'not_found' });

@@ -1,32 +1,69 @@
 import type { NextFunction, Request, Response } from 'express';
 import type { AppConfig } from './config.js';
 import { hashSecret, secretsMatch } from './crypto.js';
-import type { OperationsRepository, ServerRow } from './repository.js';
+import type { OperationsRepository, ServerRow, UserRow } from './repository.js';
+
+export const SESSION_COOKIE_NAME = 'ops_session';
 
 declare module 'express-serve-static-core' {
   interface Request {
     operationsServer?: ServerRow;
+    authUser?: UserRow;
   }
 }
 
-// Interim v1 admin auth (grilling decision: local accounts belong to
-// Etap 3's UI work, not this backend-foundation etap). A single shared
-// key is a deliberately narrow placeholder — Etap 3 replaces this
-// middleware wholesale, it does not extend it.
-export function requireAdmin(config: AppConfig) {
-  return (req: Request, res: Response, next: NextFunction): void => {
-    if (!config.adminApiKey) {
-      // Fail closed: an unconfigured admin key must never be treated as
-      // "no auth required".
-      res.status(503).json({ error: 'admin_not_configured' });
-      return;
+// Manual parse instead of the `cookie-parser` package: one cookie, one
+// call site (requireSession below) — a dependency would buy nothing here.
+export function parseCookies(header: string | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!header) {
+    return out;
+  }
+  for (const part of header.split(';')) {
+    const separatorIndex = part.indexOf('=');
+    if (separatorIndex === -1) {
+      continue;
     }
-    const provided = req.header('X-Admin-Key');
-    if (!secretsMatch(provided, config.adminApiKey)) {
+    const key = part.slice(0, separatorIndex).trim();
+    const value = part.slice(separatorIndex + 1).trim();
+    if (key) {
+      out[key] = decodeURIComponent(value);
+    }
+  }
+  return out;
+}
+
+// Etap 3: local accounts replace the interim X-Admin-Key wholesale (see
+// git history for the key-based requireAdmin this superseded). Every
+// authenticated route — viewer or admin — passes through this first;
+// requireRole layers an additional role check on top.
+export function requireSession(repository: OperationsRepository) {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const token = parseCookies(req.header('Cookie'))[SESSION_COOKIE_NAME];
+    if (!token) {
       res.status(401).json({ error: 'unauthorized' });
       return;
     }
+    const session = repository.getSessionByTokenHash(hashSecret(token), new Date().toISOString());
+    if (!session) {
+      res.status(401).json({ error: 'unauthorized' });
+      return;
+    }
+    req.authUser = session.user;
     next();
+  };
+}
+
+export function requireRole(repository: OperationsRepository, role: UserRow['role']) {
+  const authed = requireSession(repository);
+  return (req: Request, res: Response, next: NextFunction): void => {
+    authed(req, res, () => {
+      if (req.authUser?.role !== role) {
+        res.status(403).json({ error: 'forbidden' });
+        return;
+      }
+      next();
+    });
   };
 }
 

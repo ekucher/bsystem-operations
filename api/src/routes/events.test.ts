@@ -1,11 +1,16 @@
 import request from 'supertest';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { buildTestApp } from '../testUtils.js';
+import { buildTestApp, createTestUser } from '../testUtils.js';
+import type { OperationsRepository } from '../repository.js';
 import type { Express } from 'express';
 
 const SERVER_ID = '22222222-2222-4222-8222-222222222222';
 
-async function enrollAndApprove(app: Express): Promise<string> {
+async function enrollAndApprove(app: Express, repository: OperationsRepository): Promise<string> {
+  createTestUser(repository, 'admin', 'test-password', 'admin');
+  const admin = request.agent(app);
+  await admin.post('/api/v1/auth/login').send({ username: 'admin', password: 'test-password' });
+
   await request(app).post('/api/v1/enroll').send({
     serverId: SERVER_ID,
     institutionCode: '01234567',
@@ -13,20 +18,30 @@ async function enrollAndApprove(app: Express): Promise<string> {
     hostname: 'HOUSE-VET-01',
     bootstrapSecret: 'test-bootstrap-secret',
   });
-  await request(app).post(`/api/v1/admin/servers/${SERVER_ID}/approve`).set('X-Admin-Key', 'test-admin-key');
+  await admin.post(`/api/v1/admin/servers/${SERVER_ID}/approve`);
   const poll = await request(app)
     .get(`/api/v1/enroll/${SERVER_ID}`)
     .set('X-Bootstrap-Secret', 'test-bootstrap-secret');
   return poll.body.apiKey as string;
 }
 
+// Detail-endpoint assertions below need an authenticated session too
+// (any role — GET /admin/servers/:id is read-only).
+async function loginAsViewer(app: Express, repository: OperationsRepository): Promise<request.SuperAgentTest> {
+  createTestUser(repository, 'viewer', 'test-password', 'viewer');
+  const agent = request.agent(app);
+  await agent.post('/api/v1/auth/login').send({ username: 'viewer', password: 'test-password' });
+  return agent;
+}
+
 describe('events + heartbeat ingest', () => {
   let app: Express;
+  let repository: OperationsRepository;
   let apiKey: string;
 
   beforeEach(async () => {
-    ({ app } = buildTestApp());
-    apiKey = await enrollAndApprove(app);
+    ({ app, repository } = buildTestApp());
+    apiKey = await enrollAndApprove(app, repository);
   });
 
   it('rejects events without a valid API key', async () => {
@@ -72,12 +87,12 @@ describe('events + heartbeat ingest', () => {
       });
     expect(res.status).toBe(202);
 
-    const detail = await request(app)
-      .get(`/api/v1/admin/servers/${SERVER_ID}`)
-      .set('X-Admin-Key', 'test-admin-key');
+    const viewer = await loginAsViewer(app, repository);
+    const detail = await viewer.get(`/api/v1/admin/servers/${SERVER_ID}`);
     expect(detail.body.events).toHaveLength(1);
     expect(detail.body.events[0].category).toBe('health');
     expect(JSON.parse(detail.body.events[0].payload).services).toHaveLength(3);
+    expect(detail.body.latestByCategory.health.payload.services).toHaveLength(3);
   });
 
   it('rejects a malformed event payload (missing message)', async () => {
@@ -95,10 +110,10 @@ describe('events + heartbeat ingest', () => {
       .send({ bravoVersion: '5.3.0' });
     expect(res.status).toBe(202);
 
-    const detail = await request(app)
-      .get(`/api/v1/admin/servers/${SERVER_ID}`)
-      .set('X-Admin-Key', 'test-admin-key');
+    const viewer = await loginAsViewer(app, repository);
+    const detail = await viewer.get(`/api/v1/admin/servers/${SERVER_ID}`);
     expect(detail.body.server.last_heartbeat_at).not.toBeNull();
     expect(detail.body.server.bravo_version).toBe('5.3.0');
+    expect(detail.body.server.isOnline).toBe(true);
   });
 });

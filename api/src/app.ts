@@ -3,6 +3,7 @@ import type { AppConfig } from './config.js';
 import { healthRouter } from './health.js';
 import type { OperationsRepository } from './repository.js';
 import { createAdminRouter } from './routes/admin.js';
+import { createAuthRouter } from './routes/auth.js';
 import { createEnrollRouter } from './routes/enroll.js';
 import { createEventsRouter } from './routes/events.js';
 import { createHeartbeatRouter } from './routes/heartbeat.js';
@@ -13,6 +14,7 @@ export function createApp(repository: OperationsRepository, config: AppConfig): 
   const app = express();
   app.use(express.json());
   app.use(healthRouter);
+  app.use('/api/v1', createAuthRouter(repository, config));
   app.use('/api/v1', createEnrollRouter(repository, config));
   app.use('/api/v1', createAdminRouter(repository, config));
   app.use('/api/v1', createEventsRouter(repository));

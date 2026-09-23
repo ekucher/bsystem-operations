@@ -1,5 +1,5 @@
 import type { Db } from './db.js';
-import type { EventCategory, EventPayload, ProductType, ServerStatus, Severity } from './schemas.js';
+import type { EventCategory, EventPayload, ProductType, ServerStatus, Severity, UserRole } from './schemas.js';
 
 export interface ServerRow {
   id: string;
@@ -23,6 +23,20 @@ export interface EventRow {
   severity: Severity;
   payload: string;
   created_at: string;
+}
+
+export interface UserRow {
+  id: string;
+  username: string;
+  password_hash: string;
+  role: UserRole;
+  created_at: string;
+}
+
+export interface SessionWithUser {
+  token_hash: string;
+  expires_at: string;
+  user: UserRow;
 }
 
 export class OperationsRepository {
@@ -135,6 +149,116 @@ export class OperationsRepository {
   // silently.
   deleteEventsOlderThan(cutoffIso: string): number {
     const result = this.db.prepare('DELETE FROM events WHERE created_at < ?').run(cutoffIso);
+    return result.changes;
+  }
+
+  // Latest event per (server, category) across the WHOLE fleet in a
+  // single query — the overview page needs this for every server at
+  // once, and an N+1 per-server query would not scale to ~50 servers on
+  // every poll. Correlated subquery rather than a window function: keeps
+  // the SQL portable across whatever sqlite3 version better-sqlite3
+  // bundles, and the events table stays small enough (90-day retention)
+  // for this to be cheap.
+  listLatestEventPerCategoryForAllServers(): EventRow[] {
+    return this.db
+      .prepare(
+        `SELECT e.* FROM events e
+         WHERE e.id = (
+           SELECT e2.id FROM events e2
+           WHERE e2.server_id = e.server_id AND e2.category = e.category
+           ORDER BY e2.created_at DESC, e2.id DESC
+           LIMIT 1
+         )`,
+      )
+      .all() as EventRow[];
+  }
+
+  listLatestEventPerCategory(serverId: string): EventRow[] {
+    return this.db
+      .prepare(
+        `SELECT e.* FROM events e
+         WHERE e.server_id = ? AND e.id = (
+           SELECT e2.id FROM events e2
+           WHERE e2.server_id = e.server_id AND e2.category = e.category
+           ORDER BY e2.created_at DESC, e2.id DESC
+           LIMIT 1
+         )`,
+      )
+      .all(serverId) as EventRow[];
+  }
+
+  // ===== Etap 3: local accounts / sessions =====
+
+  createUser(input: { id: string; username: string; passwordHash: string; role: UserRole; now: string }): UserRow {
+    this.db
+      .prepare(
+        `INSERT INTO users (id, username, password_hash, role, created_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(input.id, input.username, input.passwordHash, input.role, input.now);
+    return this.getUserByUsername(input.username)!;
+  }
+
+  getUserByUsername(username: string): UserRow | undefined {
+    return this.db.prepare('SELECT * FROM users WHERE username = ?').get(username) as UserRow | undefined;
+  }
+
+  getUserById(id: string): UserRow | undefined {
+    return this.db.prepare('SELECT * FROM users WHERE id = ?').get(id) as UserRow | undefined;
+  }
+
+  createSession(input: { tokenHash: string; userId: string; now: string; expiresAt: string }): void {
+    this.db
+      .prepare(
+        `INSERT INTO sessions (token_hash, user_id, created_at, expires_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run(input.tokenHash, input.userId, input.now, input.expiresAt);
+  }
+
+  // Expiry is checked here (not left to the caller) so every call site
+  // gets the same "expired session behaves like no session" semantics —
+  // an expired row is treated as absent rather than silently trusted.
+  getSessionByTokenHash(tokenHash: string, nowIso: string): SessionWithUser | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT s.token_hash, s.expires_at, u.id as user_id, u.username, u.password_hash, u.role, u.created_at as user_created_at
+         FROM sessions s JOIN users u ON u.id = s.user_id
+         WHERE s.token_hash = ? AND s.expires_at > ?`,
+      )
+      .get(tokenHash, nowIso) as
+      | {
+          token_hash: string;
+          expires_at: string;
+          user_id: string;
+          username: string;
+          password_hash: string;
+          role: UserRole;
+          user_created_at: string;
+        }
+      | undefined;
+    if (!row) {
+      return undefined;
+    }
+    return {
+      token_hash: row.token_hash,
+      expires_at: row.expires_at,
+      user: {
+        id: row.user_id,
+        username: row.username,
+        password_hash: row.password_hash,
+        role: row.role,
+        created_at: row.user_created_at,
+      },
+    };
+  }
+
+  deleteSessionByTokenHash(tokenHash: string): void {
+    this.db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(tokenHash);
+  }
+
+  deleteExpiredSessions(nowIso: string): number {
+    const result = this.db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(nowIso);
     return result.changes;
   }
 }

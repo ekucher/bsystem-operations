@@ -9,7 +9,7 @@ services:
       # Local dev only — set real secrets via .env / deployment config,
       # never commit them.
       OPERATIONS_BOOTSTRAP_SECRET: "${OPERATIONS_BOOTSTRAP_SECRET:-dev-bootstrap-secret}"
-      ADMIN_API_KEY: "${ADMIN_API_KEY:-dev-admin-key}"
+      COOKIE_SECURE: "${COOKIE_SECURE:-false}"
     volumes:
       - operations-data:/data
 
