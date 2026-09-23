@@ -22,7 +22,7 @@ ui/    — dashboard (React + TypeScript + Vite), overview- та
          detailed-режими перегляду стану серверів
 ```
 
-Монорепозиторій навмисно poєднує backend і frontend цього модуля
+Монорепозиторій навмисно поєднує backend і frontend цього модуля
 (окреме архітектурне рішення — один життєвий цикл на ранній стадії).
 
 ## Розробка
@@ -31,10 +31,34 @@ ui/    — dashboard (React + TypeScript + Vite), overview- та
 npm install
 npm run typecheck
 npm run build
+npm test
 ```
 
-Локальний запуск кожної частини — див. `api/README.md` і `ui/README.md`
-(за наявності) або `docker-compose.yml` для запуску обох разом.
+Локальний запуск обох частин разом — `docker-compose.yml` (потребує
+`OPERATIONS_BOOTSTRAP_SECRET`/`ADMIN_API_KEY` в оточенні, інакше
+використовує dev-заглушки — див. `docker-compose.yml`). Окремо `api/` —
+`api/.env.example` → `.env`, потім `npm run dev --workspace=api`.
+
+## API (Etap 1)
+
+Контракт — `api/docs/openapi.yaml`. Потік self-enrollment:
+
+1. Агент генерує GUID, викликає `POST /api/v1/enroll` з
+   `bootstrapSecret` → сервер отримує статус `pending`.
+2. Адміністратор підтверджує сервер:
+   `POST /api/v1/admin/servers/{id}/approve` (`X-Admin-Key`).
+3. Агент поллить `GET /api/v1/enroll/{id}` (`X-Bootstrap-Secret`) —
+   API-ключ повертається **рівно один раз** одразу після approve
+   (reveal-once).
+4. Далі агент відправляє `POST /api/v1/events` і `POST /api/v1/heartbeat`
+   з `X-Api-Key`.
+
+`GET /api/v1/admin/servers` і `GET /api/v1/admin/servers/{id}` — дані для
+майбутнього dashboard (Etap 3). Історія подій зберігається 90 днів
+(`EVENT_RETENTION_DAYS`), старіші видаляються фоновою задачею.
+
+Автентифікація адмін-маршрутів (`X-Admin-Key`) — інтерим-рішення v1;
+Etap 3 замінює її локальними обліковими записами з RBAC-роллю.
 
 ## Пов'язані джерела
 

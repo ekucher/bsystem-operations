@@ -1,0 +1,217 @@
+openapi: 3.0.3
+info:
+  title: BSYSTEM Operations API
+  version: 0.1.0
+  description: >
+    Fleet-моніторинг серверів BRAVO-Toolkit (backup, LIMS/VetOffice
+    maintenance, health/статус служб). Standalone v1 — без інтеграції з
+    Integration Core/Module Registry (див. README).
+servers:
+  - url: /api/v1
+
+components:
+  securitySchemes:
+    bootstrapSecret:
+      type: apiKey
+      in: header
+      name: X-Bootstrap-Secret
+      description: Видається адміністратором Operations разом з увімкненням opt-in на сервері.
+    adminKey:
+      type: apiKey
+      in: header
+      name: X-Admin-Key
+      description: Інтерим v1 admin-автентифікація (Etap 3 замінить на локальні акаунти + RBAC).
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+      description: Виданий після approve — reveal-once через GET /enroll/{serverId}.
+
+  schemas:
+    ProductType:
+      type: string
+      enum: [LIMS, VETOFFICE]
+    ServerStatus:
+      type: string
+      enum: [pending, approved, revoked]
+    Severity:
+      type: string
+      enum: [SUCCESS, WARNING, ERROR, CRITICAL]
+    EventCategory:
+      type: string
+      enum: [backup, maintenance, health]
+    ServiceStatusEntry:
+      type: object
+      required: [name, status]
+      properties:
+        name:
+          type: string
+          example: exchangAPI
+        status:
+          type: string
+          enum: [running, stopped, unknown]
+    EventPayload:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+        component:
+          type: string
+        services:
+          type: array
+          items:
+            $ref: '#/components/schemas/ServiceStatusEntry'
+        details:
+          type: object
+          additionalProperties: true
+
+paths:
+  /enroll:
+    post:
+      summary: Self-enrollment сервера (GUID + bootstrap-секрет)
+      security:
+        - bootstrapSecret: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [serverId, institutionCode, productType, hostname, bootstrapSecret]
+              properties:
+                serverId:
+                  type: string
+                  format: uuid
+                institutionCode:
+                  type: string
+                productType:
+                  $ref: '#/components/schemas/ProductType'
+                hostname:
+                  type: string
+                bootstrapSecret:
+                  type: string
+      responses:
+        '202':
+          description: Прийнято (idempotent — не скидає вже approved/revoked сервер назад у pending)
+        '400':
+          description: Невалідний запит
+        '401':
+          description: Невірний bootstrap-секрет
+        '503':
+          description: Enrollment не сконфігуровано (OPERATIONS_BOOTSTRAP_SECRET відсутній)
+
+  /enroll/{serverId}:
+    get:
+      summary: Поллінг статусу enrollment; apiKey повертається РІВНО ОДИН РАЗ одразу після approve
+      security:
+        - bootstrapSecret: []
+      parameters:
+        - name: serverId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Статус (+ apiKey, лише одразу після approve)
+        '401':
+          description: Невірний bootstrap-секрет
+        '404':
+          description: Сервер не зареєстрований
+
+  /admin/servers:
+    get:
+      summary: Список усіх серверів (foundation для Etap 3 overview)
+      security:
+        - adminKey: []
+      responses:
+        '200':
+          description: Масив серверів
+
+  /admin/servers/{serverId}:
+    get:
+      summary: Деталі сервера + останні 200 подій (foundation для Etap 3 detailed-режиму)
+      security:
+        - adminKey: []
+      parameters:
+        - name: serverId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Сервер і його події
+        '404':
+          description: Не знайдено
+
+  /admin/servers/{serverId}/approve:
+    post:
+      summary: Підтвердити pending-сервер, видати API-ключ
+      security:
+        - adminKey: []
+      parameters:
+        - name: serverId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Approved
+        '404':
+          description: Не знайдено
+        '409':
+          description: Сервер не у статусі pending
+
+  /events:
+    post:
+      summary: >
+        Прийом подій від агента (Archive/BazaSync/Maintenance/Health) —
+        ЗАВЖДИ, незалежно від NotificationMode Discord-провайдера
+      security:
+        - apiKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [category, severity, payload]
+              properties:
+                category:
+                  $ref: '#/components/schemas/EventCategory'
+                severity:
+                  $ref: '#/components/schemas/Severity'
+                payload:
+                  $ref: '#/components/schemas/EventPayload'
+      responses:
+        '202':
+          description: Прийнято
+        '400':
+          description: Невалідний payload
+        '401':
+          description: Невірний/відкликаний API-ключ
+
+  /heartbeat:
+    post:
+      summary: Періодичний heartbeat (незалежно від подій) — джерело для offline-детекції (Etap 4)
+      security:
+        - apiKey: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                bravoVersion:
+                  type: string
+      responses:
+        '202':
+          description: Прийнято
+        '401':
+          description: Невірний/відкликаний API-ключ

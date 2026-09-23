@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import request from 'supertest';
-import { createApp } from './app.js';
+import { buildTestApp } from './testUtils.js';
 
 describe('GET /health', () => {
   it('returns the Module Registry health contract shape', async () => {
-    const res = await request(createApp()).get('/health');
+    const { app } = buildTestApp();
+    const res = await request(app).get('/health');
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({

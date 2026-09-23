@@ -1,15 +1,21 @@
 FROM node:22-alpine AS build
 WORKDIR /app
+# better-sqlite3 compiles a native addon via node-gyp at install time.
+RUN apk add --no-cache python3 make g++
 COPY package*.json ./
 RUN npm ci --no-audit --no-fund
 COPY . .
 RUN npm run build
+# Drop devDependencies from node_modules now, while the build stage still
+# has the toolchain, so the final stage never needs one — it just copies
+# the already-compiled native addon.
+RUN npm prune --omit=dev
 
 FROM node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production
 COPY package*.json ./
-RUN npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
+COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 # The official node image runs as root by default; drop to the built-in
 # unprivileged "node" user before serving traffic.
