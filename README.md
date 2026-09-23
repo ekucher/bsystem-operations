@@ -39,11 +39,18 @@ npm run build
 npm test
 ```
 
-Локальний запуск обох частин разом — `docker-compose.yml` (потребує
-`OPERATIONS_BOOTSTRAP_SECRET` в оточенні, інакше використовує
-dev-заглушку — див. `docker-compose.yml`). Окремо `api/` —
-`api/.env.example` → `.env`, потім `npm run dev --workspace=api`. Перший
-обліковий запис створюється окремо через `npm run create-admin`
+Локальний запуск обох частин разом (наприклад, у Docker Desktop) —
+`docker-compose.yml`: скопіюйте кореневий `.env.example` → `.env`
+(`OPERATIONS_BOOTSTRAP_SECRET`, `COOKIE_SECURE=false` для http без TLS,
+опційно `DISCORD_ALERTS_WEBHOOK_URL`), потім `docker compose up --build -d`
+— `api` на `:8081`, `ui` на `:8082`. Перший обліковий запис у щойно
+піднятому контейнері створюється скомпільованим CLI (не `npm run`, якого
+немає в production-образі): `docker compose exec api node
+dist/cli/create-admin.js --username <ім'я> --password <пароль> --role admin`.
+
+Окремо `api/` без Docker — `api/.env.example` → `.env`, потім
+`npm run dev --workspace=api`. Перший обліковий запис створюється окремо
+через `npm run create-admin --workspace=api`
 (див. розділ "Автентифікація" нижче) — БД не має дефолтних облікових
 записів.
 
