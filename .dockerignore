@@ -1,0 +1,10 @@
+# Build context is the repo root for both api/ and ui/ images (npm
+# workspaces monorepo — see docker-compose.yml). Docker only reads
+# .dockerignore from the context root, not per-Dockerfile directories.
+**/node_modules
+**/dist
+**/*.test.ts
+.git
+.env
+.env.local
+docs
