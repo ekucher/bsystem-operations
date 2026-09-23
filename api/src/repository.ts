@@ -14,6 +14,7 @@ export interface ServerRow {
   approved_at: string | null;
   last_seen_at: string | null;
   last_heartbeat_at: string | null;
+  offline_alerted_at: string | null;
 }
 
 export interface EventRow {
@@ -260,5 +261,15 @@ export class OperationsRepository {
   deleteExpiredSessions(nowIso: string): number {
     const result = this.db.prepare('DELETE FROM sessions WHERE expires_at <= ?').run(nowIso);
     return result.changes;
+  }
+
+  // ===== Etap 4: offline-alert dedup marker =====
+
+  markOfflineAlerted(id: string, now: string): void {
+    this.db.prepare('UPDATE servers SET offline_alerted_at = ? WHERE id = ?').run(now, id);
+  }
+
+  clearOfflineAlert(id: string): void {
+    this.db.prepare('UPDATE servers SET offline_alerted_at = NULL WHERE id = ?').run(id);
   }
 }

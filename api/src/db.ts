@@ -17,7 +17,12 @@ CREATE TABLE IF NOT EXISTS servers (
   created_at TEXT NOT NULL,
   approved_at TEXT,
   last_seen_at TEXT,
-  last_heartbeat_at TEXT
+  last_heartbeat_at TEXT,
+  -- Etap 4: set when an offline Discord alert has been sent for the
+  -- server's CURRENT offline episode; cleared on recovery. Dedup marker
+  -- — without it every offline-check tick would re-alert the same
+  -- already-known-offline server.
+  offline_alerted_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS events (

@@ -18,6 +18,12 @@ export interface AppConfig {
   // "offline" in the overview/detail UI. Etap 4's Discord alerting reuses
   // the same threshold.
   heartbeatExpectedIntervalMinutes: number;
+  // Etap 4 (grilling: offline-детекція -> наявний Discord alerts-канал,
+  // не нова інфраструктура сповіщень). Undefined = alerting disabled
+  // (fail-safe no-op, not a crash) — same "explicit opt-in" posture as
+  // bootstrapSecret.
+  discordAlertsWebhookUrl: string | undefined;
+  offlineCheckIntervalMinutes: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -35,5 +41,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     sessionTtlHours: Number(env.SESSION_TTL_HOURS ?? 24),
     cookieSecure: env.COOKIE_SECURE !== 'false',
     heartbeatExpectedIntervalMinutes: Number(env.HEARTBEAT_EXPECTED_INTERVAL_MINUTES ?? 60),
+    discordAlertsWebhookUrl: env.DISCORD_ALERTS_WEBHOOK_URL,
+    offlineCheckIntervalMinutes: Number(env.OFFLINE_CHECK_INTERVAL_MINUTES ?? 5),
   };
 }

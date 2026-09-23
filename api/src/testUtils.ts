@@ -32,6 +32,8 @@ export function buildTestApp(overrides: Partial<AppConfig> = {}): { app: Express
     sessionTtlHours: 24,
     cookieSecure: false,
     heartbeatExpectedIntervalMinutes: 60,
+    discordAlertsWebhookUrl: undefined,
+    offlineCheckIntervalMinutes: 5,
     ...overrides,
   };
   const repository = new OperationsRepository(openDb(config.dbPath));

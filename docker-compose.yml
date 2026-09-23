@@ -10,6 +10,8 @@ services:
       # never commit them.
       OPERATIONS_BOOTSTRAP_SECRET: "${OPERATIONS_BOOTSTRAP_SECRET:-dev-bootstrap-secret}"
       COOKIE_SECURE: "${COOKIE_SECURE:-false}"
+      DISCORD_ALERTS_WEBHOOK_URL: "${DISCORD_ALERTS_WEBHOOK_URL:-}"
+      OFFLINE_CHECK_INTERVAL_MINUTES: "${OFFLINE_CHECK_INTERVAL_MINUTES:-5}"
     volumes:
       - operations-data:/data
 
