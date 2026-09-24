@@ -3,19 +3,47 @@ services:
     build:
       context: .
       dockerfile: api/Dockerfile
-    ports:
-      - "8081:8080"
+      args:
+        # Baked into the image as GIT_SHA env var, surfaced by GET
+        # /health as `revision`. Defaults to "unknown" — this is a
+        # legitimate value (e.g. local builds), not an error.
+        GIT_SHA: "${GIT_SHA:-unknown}"
+    # No host port publish: nginx (the `ui` service) is the canonical
+    # entry point and already proxies /api/* to this service over the
+    # compose network (see ui/nginx.conf) at the internal `api:8080`
+    # address. Direct host access for local curl-testing is available via
+    # docker-compose.override.yml.example's dev profile, not here.
     environment:
       PORT: "8080"
       DB_PATH: "/data/operations.sqlite3"
-      # Local dev only — set real secrets via .env / deployment config,
-      # never commit them.
-      OPERATIONS_BOOTSTRAP_SECRET: "${OPERATIONS_BOOTSTRAP_SECRET:-dev-bootstrap-secret}"
-      COOKIE_SECURE: "${COOKIE_SECURE:-false}"
+      # Required — no weak literal default. `${VAR:?err}` makes `docker
+      # compose up`/`config` refuse to start at all when it's unset,
+      # instead of silently accepting a known bootstrap secret (that used
+      # to be this file's actual production bug: a literal
+      # "dev-bootstrap-secret" fallback). Set it in a root `.env` (see
+      # .env.example) or your deployment's secret store.
+      OPERATIONS_BOOTSTRAP_SECRET: "${OPERATIONS_BOOTSTRAP_SECRET:?OPERATIONS_BOOTSTRAP_SECRET must be set — see .env.example; refusing to start with a guessable default}"
+      # No COOKIE_SECURE override here on purpose — api/src/config.ts
+      # already defaults it to true (Secure-cookie) unless explicitly
+      # set to the literal string "false". Overriding it to false here
+      # would silently weaken every production deployment that forgets
+      # to override it back. Local dev over plain http opts out via
+      # docker-compose.override.yml (see
+      # docker-compose.override.yml.example), not the base file.
       DISCORD_ALERTS_WEBHOOK_URL: "${DISCORD_ALERTS_WEBHOOK_URL:-}"
       OFFLINE_CHECK_INTERVAL_MINUTES: "${OFFLINE_CHECK_INTERVAL_MINUTES:-5}"
     volumes:
       - operations-data:/data
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   ui:
     build:
@@ -25,6 +53,16 @@ services:
       - "8082:8080"
     depends_on:
       - api
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   operations-data:

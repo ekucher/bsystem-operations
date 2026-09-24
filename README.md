@@ -40,10 +40,25 @@ npm test
 ```
 
 Локальний запуск обох частин разом (наприклад, у Docker Desktop) —
-`docker-compose.yml`: скопіюйте кореневий `.env.example` → `.env`
-(`OPERATIONS_BOOTSTRAP_SECRET`, `COOKIE_SECURE=false` для http без TLS,
-опційно `DISCORD_ALERTS_WEBHOOK_URL`), потім `docker compose up --build -d`
-— `api` на `:8081`, `ui` на `:8082`. Перший обліковий запис у щойно
+`docker-compose.yml`: скопіюйте кореневий `.env.example` → `.env` й
+задайте реальний `OPERATIONS_BOOTSTRAP_SECRET` — без нього `docker
+compose up` одразу відмовиться стартувати (`variable is not set`,
+навмисно: базовий compose-файл більше не має слабкого дефолту на цю
+змінну). `COOKIE_SECURE` базовий `docker-compose.yml` не підставляє
+взагалі — лишається production-безпечний дефолт `api/src/config.ts`
+(`true`). Для локальної розробки по http без TLS скопіюйте
+`docker-compose.override.yml.example` → `docker-compose.override.yml`
+(лишається local-only, у `.gitignore`, docker compose підхоплює його
+автоматично) — там `COOKIE_SECURE=false` і закоментований прямий
+host-порт для API.
+
+`docker compose up --build -d` піднімає `ui` на `:8082` — це єдина
+опублікована на хост адреса за замовчуванням: nginx (`ui`) проксіює
+`/api/*` до `api`-сервіса напряму по внутрішній Docker-мережі
+(`api:8080`), тож API в базовому `docker-compose.yml` не публікує порт
+на хост. Прямий доступ до API з хоста (curl/Postman, в обхід nginx) —
+через закоментовану секцію `ports` у
+`docker-compose.override.yml.example`. Перший обліковий запис у щойно
 піднятому контейнері створюється скомпільованим CLI (не `npm run`, якого
 немає в production-образі): `docker compose exec api node
 dist/cli/create-admin.js --username <ім'я> --password <пароль> --role admin`.
@@ -55,6 +70,13 @@ dist/cli/create-admin.js --username <ім'я> --password <пароль> --role a
 записів.
 
 ## API
+
+`GET /health` — liveness (контракт Module Registry, ТЗ §27): не звертається
+до БД, відповідає `200`, поки живий сам процес; містить `revision`
+(git SHA збірки з `GIT_SHA`, `"unknown"` якщо не задано білдом). `GET
+/ready` — readiness: реально виконує запит до SQLite, повертає `503`,
+якщо БД недоступна; саме цей маршрут використовує `HEALTHCHECK` в
+`api/Dockerfile`, а не `/health`.
 
 Контракт — `api/docs/openapi.yaml`. Потік self-enrollment (Etap 1):
 
