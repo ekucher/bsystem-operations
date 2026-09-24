@@ -72,8 +72,10 @@ describe('runMigrations — upgrading an old-shape DB', () => {
     runMigrations(db);
 
     expect(db.pragma('user_version', { simple: true })).toBe(MIGRATIONS[MIGRATIONS.length - 1].version);
-    expect(tableNames(db).sort()).toEqual(['events', 'servers', 'sessions', 'users']);
+    expect(tableNames(db).sort()).toEqual(['admin_actions', 'events', 'servers', 'sessions', 'users']);
     expect(tableColumns(db, 'servers')).toContain('offline_alerted_at');
+    expect(tableColumns(db, 'servers')).toContain('enrollment_claim_hash');
+    expect(tableColumns(db, 'servers')).toContain('pending_api_key_expires_at');
 
     // Pre-existing data survived the upgrade untouched.
     const server = db.prepare('SELECT * FROM servers WHERE id = ?').get(SERVER_ID) as { offline_alerted_at: unknown };
@@ -120,14 +122,15 @@ describe('runMigrations — fresh empty DB', () => {
     expect(db.pragma('user_version', { simple: true })).toBe(MIGRATIONS[MIGRATIONS.length - 1].version);
 
     const repository = new OperationsRepository(db);
-    const server = repository.upsertPendingServer({
+    const result = repository.upsertPendingServer({
       id: SERVER_ID,
       institutionCode: '01234567',
       productType: 'VETOFFICE',
       hostname: 'HOUSE-VET-01',
       now: '2026-01-01T00:00:00.000Z',
     });
-    expect(server.status).toBe('pending');
+    expect(result.outcome).toBe('created');
+    expect(result.server.status).toBe('pending');
     repository.insertEvent({
       serverId: SERVER_ID,
       category: 'health',
@@ -151,7 +154,7 @@ describe('runMigrations — idempotency', () => {
     // each table exists (sqlite_master would contain duplicates or the
     // second run would have thrown on CREATE TABLE without IF NOT
     // EXISTS if steps had re-run).
-    expect(tableNames(db).sort()).toEqual(['events', 'servers', 'sessions', 'users']);
+    expect(tableNames(db).sort()).toEqual(['admin_actions', 'events', 'servers', 'sessions', 'users']);
   });
 });
 

@@ -124,6 +124,44 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 5,
+    description: 'Enrollment claim hash + pending-key reveal TTL on servers (D1/D3/D5)',
+    up: (db) => {
+      // See the block comment above MIGRATIONS for why this is a
+      // column-existence guard rather than a bare ALTER TABLE: a
+      // pre-existing DB may already be at a schema shape close to this
+      // one from before the migration runner existed. That is not the
+      // case here (this step has no historical inline-SCHEMA
+      // counterpart), but the guard costs nothing and keeps every step
+      // in this file re-runnable the same way.
+      const columns = db.pragma('table_info(servers)') as Array<{ name: string }>;
+      const names = new Set(columns.map((c) => c.name));
+      if (!names.has('enrollment_claim_hash')) {
+        db.exec('ALTER TABLE servers ADD COLUMN enrollment_claim_hash TEXT;');
+      }
+      if (!names.has('pending_api_key_expires_at')) {
+        db.exec('ALTER TABLE servers ADD COLUMN pending_api_key_expires_at TEXT;');
+      }
+    },
+  },
+  {
+    version: 6,
+    description: 'admin_actions audit trail for approve/revoke/reissue (D4)',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS admin_actions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          action TEXT NOT NULL CHECK (action IN ('approve', 'revoke', 'reissue')),
+          server_id TEXT NOT NULL REFERENCES servers(id),
+          admin_user_id TEXT NOT NULL REFERENCES users(id),
+          reason TEXT,
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_admin_actions_server_created ON admin_actions (server_id, created_at);
+      `);
+    },
+  },
 ];
 
 // Runs every migration whose version is greater than the DB's current
