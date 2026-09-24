@@ -97,12 +97,22 @@ const ONE_HOUR_MS = 60 * 60 * 1000;
 // sessions table from growing unbounded, not a security control. Same
 // "run once at startup, then on an interval" convention as
 // retention.ts's scheduleRetentionCleanup.
+// D10 (Wave 2 hardening): try/catch around the callback body so a single
+// bad tick (transient DB error) logs and lets the next scheduled tick
+// still fire, instead of throwing inside the setInterval callback — which
+// would silently kill this interval forever (or worse) without affecting
+// the rest of the process.
 export function scheduleSessionCleanup(repository: OperationsRepository): NodeJS.Timeout {
   const run = (): void => {
-    const deleted = repository.deleteExpiredSessions(new Date().toISOString());
-    if (deleted > 0) {
+    try {
+      const deleted = repository.deleteExpiredSessions(new Date().toISOString());
+      if (deleted > 0) {
+        // eslint-disable-next-line no-console
+        console.log(`session cleanup: deleted ${deleted} expired session(s)`);
+      }
+    } catch (err) {
       // eslint-disable-next-line no-console
-      console.log(`session cleanup: deleted ${deleted} expired session(s)`);
+      console.error('session cleanup: tick failed', err);
     }
   };
   run();

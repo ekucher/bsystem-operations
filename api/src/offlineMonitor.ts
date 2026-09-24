@@ -79,11 +79,32 @@ export function scheduleOfflineMonitor(repository: OperationsRepository, config:
     return undefined;
   }
   const intervalMs = config.offlineCheckIntervalMinutes * 60_000;
+  // D6 (Wave 2 hardening): re-entrancy guard. runOfflineCheck is async and
+  // now does per-server network calls (Discord webhook, with its own
+  // timeout/retry — see discordAlerts.ts D7/D8) that can outlast a single
+  // tick's interval on a large fleet or a slow/rate-limited webhook. A
+  // module-level in-flight flag (scoped to this scheduleOfflineMonitor
+  // call, so each call — e.g. one per test — gets its own) means a tick
+  // that fires while the previous run's promise is still pending is
+  // skipped and logged rather than started concurrently, which would risk
+  // double-sending alerts or racing on the same offline_alerted_at dedup
+  // marker.
+  let checkInFlight = false;
   const run = (): void => {
-    runOfflineCheck(repository, config, new Date()).catch((err: unknown) => {
+    if (checkInFlight) {
       // eslint-disable-next-line no-console
-      console.error('offlineMonitor: check run failed', err);
-    });
+      console.warn('offlineMonitor: previous check still running, skipping this tick');
+      return;
+    }
+    checkInFlight = true;
+    runOfflineCheck(repository, config, new Date())
+      .catch((err: unknown) => {
+        // eslint-disable-next-line no-console
+        console.error('offlineMonitor: check run failed', err);
+      })
+      .finally(() => {
+        checkInFlight = false;
+      });
   };
   run();
   return setInterval(run, intervalMs);

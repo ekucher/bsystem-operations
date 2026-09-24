@@ -57,11 +57,40 @@ describe('admin overview enrichment', () => {
     expect(res.status).toBe(401);
   });
 
-  it('flags a server offline when it has never sent a heartbeat', async () => {
+  // D5 (Wave 2 hardening): a server that has never sent a heartbeat is NOT
+  // immediately flagged offline if it was JUST approved — it gets the
+  // same heartbeat-interval * missed-threshold grace window an
+  // already-reporting server gets between heartbeats (see
+  // serverStatus.ts's isServerOnline, referenced from last_heartbeat_at
+  // ?? approved_at). This replaces the old expectation of `false` here,
+  // which was the bug D5 fixes: a freshly-approved server used to be
+  // flagged "offline" (and alerted on) before its agent even had a
+  // chance to send its first heartbeat.
+  it('does not flag a just-approved server offline before its grace window elapses, even with no heartbeat yet', async () => {
     const { app, repository } = buildTestApp();
     const admin = await loginAsAdmin(app, repository);
     const serverId = '33333333-3333-4333-8333-333333333333';
     await enrollApproveAndGetKey(app, admin, serverId);
+
+    const overview = await admin.get('/api/v1/admin/servers');
+    expect(overview.status).toBe(200);
+    const server = overview.body.servers.find((s: { id: string }) => s.id === serverId);
+    expect(server.isOnline).toBe(true);
+  });
+
+  it('flags a server offline once its post-approval grace window elapses with still no heartbeat', async () => {
+    const { app, repository, db } = buildTestApp();
+    const admin = await loginAsAdmin(app, repository);
+    const serverId = '66666666-6666-4666-8666-666666666666';
+    await enrollApproveAndGetKey(app, admin, serverId);
+
+    // Backdate approved_at past the grace window (heartbeatExpectedIntervalMinutes
+    // * heartbeatMissedThreshold = 60 * 2 = 120 minutes in buildTestApp's
+    // default config) directly against the DB handle — the approve route
+    // itself always stamps "now", so this simulates time having passed
+    // since a real approval with no heartbeat ever arriving.
+    const longAgo = new Date(Date.now() - 200 * 60_000).toISOString();
+    db.prepare('UPDATE servers SET approved_at = ? WHERE id = ?').run(longAgo, serverId);
 
     const overview = await admin.get('/api/v1/admin/servers');
     expect(overview.status).toBe(200);

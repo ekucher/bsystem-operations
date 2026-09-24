@@ -41,21 +41,35 @@ export function groupLatestEventsByServer(rows: EventRow[]): Map<string, Record<
 // operationsReportingSettings.HeartbeatIntervalMinutes) — this uses a
 // fleet-wide assumption (config.heartbeatExpectedIntervalMinutes) times
 // the missed-heartbeat threshold (grilling Q20: 2 missed = offline).
-// A server that has never sent a heartbeat (pending enrollment, or
-// approved but not yet checked in) is never "online".
+//
+// D5 (Wave 2 hardening): the reference point for "how long has it been
+// since we last heard from this server" is `last_heartbeat_at ??
+// approved_at`, not `last_heartbeat_at` alone. Without this fallback, a
+// server that was JUST approved (last_heartbeat_at is still NULL — its
+// agent hasn't sent its first heartbeat yet) had no reference point at
+// all and was always treated as maximally overdue, so offlineMonitor.ts
+// alerted it as "offline" almost immediately after approval — before the
+// agent even had a chance to start reporting. Falling back to
+// approved_at gives a freshly-approved server the SAME grace window
+// (expectedIntervalMinutes * missedThreshold) to send its first
+// heartbeat that an already-reporting server gets between heartbeats. A
+// server that is neither approved nor ever heartbeated (still 'pending')
+// has no reference point at all and is still never "online" — correct,
+// since offlineMonitor.ts already skips non-approved servers entirely.
 export function isServerOnline(
   server: ServerRow,
   now: Date,
   expectedIntervalMinutes: number,
   missedThreshold: number,
 ): boolean {
-  if (!server.last_heartbeat_at) {
+  const referenceIso = server.last_heartbeat_at ?? server.approved_at;
+  if (!referenceIso) {
     return false;
   }
-  const lastHeartbeatMs = new Date(server.last_heartbeat_at).getTime();
-  if (Number.isNaN(lastHeartbeatMs)) {
+  const referenceMs = new Date(referenceIso).getTime();
+  if (Number.isNaN(referenceMs)) {
     return false;
   }
   const thresholdMs = expectedIntervalMinutes * missedThreshold * 60_000;
-  return now.getTime() - lastHeartbeatMs <= thresholdMs;
+  return now.getTime() - referenceMs <= thresholdMs;
 }
