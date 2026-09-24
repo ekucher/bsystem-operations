@@ -3,7 +3,7 @@ import type { Express } from 'express';
 import { createApp } from './app.js';
 import type { AppConfig } from './config.js';
 import { hashPassword } from './crypto.js';
-import { openDb } from './db.js';
+import { openDb, type Db } from './db.js';
 import { OperationsRepository, type UserRow } from './repository.js';
 import type { UserRole } from './schemas.js';
 
@@ -22,7 +22,9 @@ export function createTestUser(
   });
 }
 
-export function buildTestApp(overrides: Partial<AppConfig> = {}): { app: Express; repository: OperationsRepository } {
+export function buildTestApp(
+  overrides: Partial<AppConfig> = {},
+): { app: Express; repository: OperationsRepository; db: Db } {
   const config: AppConfig = {
     port: 0,
     dbPath: ':memory:',
@@ -34,8 +36,10 @@ export function buildTestApp(overrides: Partial<AppConfig> = {}): { app: Express
     heartbeatExpectedIntervalMinutes: 60,
     discordAlertsWebhookUrl: undefined,
     offlineCheckIntervalMinutes: 5,
+    gitSha: 'test-sha',
     ...overrides,
   };
-  const repository = new OperationsRepository(openDb(config.dbPath));
-  return { app: createApp(repository, config), repository };
+  const db = openDb(config.dbPath);
+  const repository = new OperationsRepository(db);
+  return { app: createApp(repository, config, db), repository, db };
 }
