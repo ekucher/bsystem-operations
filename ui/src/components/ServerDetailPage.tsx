@@ -7,6 +7,7 @@ import {
   componentLabel,
   detailLabel,
   formatDetailValue,
+  NEVER_HEARTBEAT_LABEL,
   onlineLabel,
   onlineTier,
   pillClassForTier,
@@ -19,7 +20,8 @@ import {
   stageTier,
 } from '../labels';
 import { computeStaleLevel, type HeartbeatConfig } from '../staleness';
-import type { EventPayload, EventStage, ServerDetail } from '../types';
+import { isEventStage } from '../types';
+import type { EventPayload, ServerDetail } from '../types';
 
 interface ServerDetailPageProps {
   serverId: string;
@@ -154,6 +156,11 @@ export default function ServerDetailPage({ serverId, onBack, heartbeatConfig }: 
             · Останній контакт:{' '}
             {staleLevel === 'ok' ? (
               formatTimestamp(server.last_heartbeat_at)
+            ) : staleLevel === 'never' ? (
+              <span className="stale-never" title="Сервер підтверджено, але жодного heartbeat від нього ще не надходило">
+                <IconWarning />
+                {NEVER_HEARTBEAT_LABEL}
+              </span>
             ) : (
               <span
                 className={staleLevel === 'critical' ? 'stale-critical' : 'stale-warn'}
@@ -174,7 +181,7 @@ export default function ServerDetailPage({ serverId, onBack, heartbeatConfig }: 
           const tier = entry ? severityTier(entry.severity) : 'pending';
           return (
             <div key={category} className="status-card">
-              <h3>{CATEGORY_LABELS[category]}</h3>
+              <h2 className="status-card-title">{CATEGORY_LABELS[category]}</h2>
               {entry ? (
                 <>
                   <span className={`pill pill-${pillClassForTier(tier)}`}>
@@ -192,7 +199,7 @@ export default function ServerDetailPage({ serverId, onBack, heartbeatConfig }: 
         })}
       </div>
 
-      <div className="section-title">Служби</div>
+      <h2 className="section-title">Служби</h2>
       {latestServices.length > 0 ? (
         <div className="card">
           {latestServices.map((service) => {
@@ -210,18 +217,29 @@ export default function ServerDetailPage({ serverId, onBack, heartbeatConfig }: 
         <p className="muted">Статус служб ще не отримано.</p>
       )}
 
-      <div className="section-title">Історія подій</div>
+      <h2 className="section-title">Історія подій</h2>
       {events.length > 0 ? (
         <ul className="card event-timeline">
           {events.map((event) => {
             const payload = parsePayload(event.payload);
-            const stages = Array.isArray(payload.details?.stages) ? (payload.details!.stages as EventStage[]) : null;
+            const rawStages = payload.details?.stages;
+            // Malformed/future-shaped stage entries (non-object elements,
+            // missing name/status, unexpected status strings) are skipped
+            // rather than cast — see isEventStage. The rest of the event
+            // still renders normally.
+            const stagesIsArray = Array.isArray(rawStages);
+            const stages = stagesIsArray ? (rawStages as unknown[]).filter(isEventStage) : null;
+            const hasMalformedStages = stagesIsArray && stages !== null && stages.length < (rawStages as unknown[]).length;
+            // If `stages` isn't even array-shaped (e.g. a string), it's left
+            // in otherDetails so it still surfaces as raw JSON below rather
+            // than being silently dropped.
             const otherDetails = payload.details
-              ? Object.fromEntries(Object.entries(payload.details).filter(([key]) => key !== 'stages'))
+              ? Object.fromEntries(Object.entries(payload.details).filter(([key]) => key !== 'stages' || !stagesIsArray))
               : {};
             const knownEntries = Object.entries(otherDetails).filter(([key]) => detailLabel(key) !== null);
             const unknownEntries = Object.entries(otherDetails).filter(([key]) => detailLabel(key) === null);
-            const hasExpandable = Boolean(stages?.length) || knownEntries.length > 0 || unknownEntries.length > 0;
+            const hasExpandable =
+              Boolean(stages?.length) || knownEntries.length > 0 || unknownEntries.length > 0 || hasMalformedStages;
             const tier = severityTier(event.severity);
             return (
               <li key={event.id} className="event-row">
@@ -259,6 +277,11 @@ export default function ServerDetailPage({ serverId, onBack, heartbeatConfig }: 
                           })}
                         </div>
                       ) : null}
+                      {hasMalformedStages && (
+                        <p className="muted stage-malformed-note">
+                          Частину етапів події не вдалося розпізнати (несподіваний формат) — їх пропущено.
+                        </p>
+                      )}
                       {knownEntries.length > 0 && (
                         <dl className="kv-grid">
                           {knownEntries.map(([key, value]) => (
