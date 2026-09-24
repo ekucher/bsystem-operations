@@ -211,6 +211,7 @@ describe('runMigrations — Wave-2 C1: legacy plaintext pending_api_key cleanup'
       institutionCode: '01234567',
       productType: 'LIMS',
       hostname: 'HOST-fresh',
+      claim: 'test-claim',
       now: '2026-01-01T00:00:00.000Z',
     });
     const approved = repository.approveServer(serverId, 'plaintext-key', 'hash', '2026-01-01T00:00:00.000Z');

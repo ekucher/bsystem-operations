@@ -20,6 +20,7 @@ describe('Wave-2 C3: atomic lifecycle + audit', () => {
       institutionCode: '01234567',
       productType: 'LIMS',
       hostname: 'HOST-atomic',
+      claim: 'test-claim',
       now: '2026-01-01T00:00:00.000Z',
     });
     // An admin_user_id that does not exist in `users` — any audit insert
