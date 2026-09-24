@@ -188,6 +188,33 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 8,
+    description: 'Wave-2 C1: clear legacy plaintext pending_api_key rows with no TTL',
+    up: (db) => {
+      // Migration step 5 (version 5) added pending_api_key_expires_at as a
+      // new nullable column for the TTL-bounded reveal model (D3). Any
+      // server that was approved BEFORE that migration existed wrote a
+      // plaintext pending_api_key under the OLD reveal-once model, which
+      // never set an expiry — so after upgrading, that row has
+      // pending_api_key IS NOT NULL and pending_api_key_expires_at IS
+      // NULL. repository.ts's readPendingApiKey already treats a NULL
+      // expiry as "not readable" defensively (never "valid forever"), so
+      // this is not an exploitable read path today — but a plaintext
+      // secret sitting indefinitely in the DB file with no TTL is still a
+      // standing regression against the TTL model this hardening pass
+      // requires. Clearing it here is the safer of the two options laid
+      // out in the hardening brief: any server whose enrollment happened
+      // to be mid-flight across this exact upgrade boundary needs an
+      // admin-initiated reissue (D4) to get a retrievable key again — a
+      // rare, one-time inconvenience, not a routine occurrence.
+      db.exec(`
+        UPDATE servers
+        SET pending_api_key = NULL, pending_api_key_expires_at = NULL
+        WHERE pending_api_key IS NOT NULL AND pending_api_key_expires_at IS NULL;
+      `);
+    },
+  },
 ];
 
 // Runs every migration whose version is greater than the DB's current
@@ -219,6 +246,24 @@ export const MIGRATIONS: Migration[] = [
 export function runMigrations(db: Db, migrations: Migration[] = MIGRATIONS): void {
   const currentVersion = db.pragma('user_version', { simple: true }) as number;
   const ordered = [...migrations].sort((a, b) => a.version - b.version);
+
+  // Wave-2 C2: fail closed if this DB has already been migrated further
+  // than this binary knows how to run. This happens when an OLDER binary
+  // (e.g. a rollback deploy) is pointed at a DB file a NEWER binary
+  // already migrated — running is not safe: the older binary's queries
+  // may reference columns/tables/constraints that don't match what's
+  // actually on disk, or simply be unaware of invariants the newer schema
+  // relies on, and could silently corrupt data. This check must happen
+  // BEFORE the loop below: the loop naturally applies zero steps in this
+  // situation (every migration.version <= currentVersion), which looks
+  // "fine" from the loop's perspective but gives no signal to whoever is
+  // running a stale binary against a newer schema that anything is wrong.
+  const latestKnownVersion = ordered.length > 0 ? ordered[ordered.length - 1].version : 0;
+  if (currentVersion > latestKnownVersion) {
+    throw new Error(
+      `Database schema version ${currentVersion} is newer than supported version ${latestKnownVersion}. Refusing to start.`,
+    );
+  }
 
   for (const migration of ordered) {
     if (migration.version <= currentVersion) {
