@@ -40,10 +40,25 @@ npm test
 ```
 
 Локальний запуск обох частин разом (наприклад, у Docker Desktop) —
-`docker-compose.yml`: скопіюйте кореневий `.env.example` → `.env`
-(`OPERATIONS_BOOTSTRAP_SECRET`, `COOKIE_SECURE=false` для http без TLS,
-опційно `DISCORD_ALERTS_WEBHOOK_URL`), потім `docker compose up --build -d`
-— `api` на `:8081`, `ui` на `:8082`. Перший обліковий запис у щойно
+`docker-compose.yml`: скопіюйте кореневий `.env.example` → `.env` й
+задайте реальний `OPERATIONS_BOOTSTRAP_SECRET` — без нього `docker
+compose up` одразу відмовиться стартувати (`variable is not set`,
+навмисно: базовий compose-файл більше не має слабкого дефолту на цю
+змінну). `COOKIE_SECURE` базовий `docker-compose.yml` не підставляє
+взагалі — лишається production-безпечний дефолт `api/src/config.ts`
+(`true`). Для локальної розробки по http без TLS скопіюйте
+`docker-compose.override.yml.example` → `docker-compose.override.yml`
+(лишається local-only, у `.gitignore`, docker compose підхоплює його
+автоматично) — там `COOKIE_SECURE=false` і закоментований прямий
+host-порт для API.
+
+`docker compose up --build -d` піднімає `ui` на `:8082` — це єдина
+опублікована на хост адреса за замовчуванням: nginx (`ui`) проксіює
+`/api/*` до `api`-сервіса напряму по внутрішній Docker-мережі
+(`api:8080`), тож API в базовому `docker-compose.yml` не публікує порт
+на хост. Прямий доступ до API з хоста (curl/Postman, в обхід nginx) —
+через закоментовану секцію `ports` у
+`docker-compose.override.yml.example`. Перший обліковий запис у щойно
 піднятому контейнері створюється скомпільованим CLI (не `npm run`, якого
 немає в production-образі): `docker compose exec api node
 dist/cli/create-admin.js --username <ім'я> --password <пароль> --role admin`.
@@ -56,18 +71,35 @@ dist/cli/create-admin.js --username <ім'я> --password <пароль> --role a
 
 ## API
 
+`GET /health` — liveness (контракт Module Registry, ТЗ §27): не звертається
+до БД, відповідає `200`, поки живий сам процес; містить `revision`
+(git SHA збірки з `GIT_SHA`, `"unknown"` якщо не задано білдом). `GET
+/ready` — readiness: реально виконує запит до SQLite, повертає `503`,
+якщо БД недоступна; саме цей маршрут використовує `HEALTHCHECK` в
+`api/Dockerfile`, а не `/health`.
+
 Контракт — `api/docs/openapi.yaml`. Потік self-enrollment (Etap 1):
 
 1. Агент генерує GUID, викликає `POST /api/v1/enroll` з
-   `bootstrapSecret` → сервер отримує статус `pending`.
+   `X-Bootstrap-Secret` (заголовок — єдиний канонічний транспорт для
+   обох `/enroll`-маршрутів) → сервер отримує статус `pending`, а
+   відповідь містить одноразово видане `claimToken` (агент має його
+   зберегти — саме воно потім прив'язує поллінг до ЦЬОГО enrollment).
 2. Адміністратор підтверджує сервер у dashboard (approve-кнопка на
    overview) або напряму `POST /api/v1/admin/servers/{id}/approve`
    (сесія з роллю `admin`).
-3. Агент поллить `GET /api/v1/enroll/{id}` (`X-Bootstrap-Secret`) —
-   API-ключ повертається **рівно один раз** одразу після approve
-   (reveal-once).
+3. Агент поллить `GET /api/v1/enroll/{id}` з ОБОМА заголовками —
+   `X-Bootstrap-Secret` і `X-Enrollment-Claim` (значення claimToken).
+   API-ключ доступний протягом обмеженого TTL-вікна (5 хв) після
+   approve/reissue — не reveal-once: той самий claim може повторно
+   прочитати ключ у межах вікна, якщо перша відповідь загубилась.
 4. Далі агент відправляє `POST /api/v1/events` і `POST /api/v1/heartbeat`
    з `X-Api-Key`.
+5. Адміністратор може `POST /api/v1/admin/servers/{id}/revoke` (пending
+   або approved → revoked, ключ одразу перестає працювати) або
+   `POST /api/v1/admin/servers/{id}/reissue` (нова пара ключа; controlled
+   un-revoke, якщо сервер був revoked) — обидва лише для ролі `admin`,
+   пишуть аудит-рядок в `admin_actions`.
 
 `GET /api/v1/admin/servers` і `GET /api/v1/admin/servers/{id}` (Etap 3) —
 збагачені дані для dashboard: `isOnline` (розраховується з
@@ -120,6 +152,17 @@ alerts-канал через `DISCORD_ALERTS_WEBHOOK_URL` при переход�
 на production-хості, пілот на 1 сервері найнижчого ризику, контрольована
 перевірка heartbeat/events/офлайн-алертингу, критерії успіху перед
 розширенням на решту флоту.
+
+## CI та безпека репозиторію
+
+`.github/workflows/ci.yml` (`main`-push і кожен PR): typecheck/build/test
+для `api` і `ui`, лінтинг `api/docs/openapi.yaml`, `npm audit` +
+gitleaks secret-scanning, і реальний наскрізний `docker compose`-прогін
+(build обох образів, fail-closed перевірка без
+`OPERATIONS_BOOTSTRAP_SECRET`, login → `/auth/me` → `/admin/servers` →
+logout). Усі пʼять job'ів обов'язкові для merge у `main` — гілка захищена
+(`docs/REPOSITORY_GOVERNANCE.md` — деталі й спосіб змінити/перевірити).
+`SECURITY.md` — як повідомити про вразливість.
 
 ## Пов'язані джерела
 

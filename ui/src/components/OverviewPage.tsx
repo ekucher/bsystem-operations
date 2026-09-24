@@ -3,6 +3,7 @@ import { ApiError, approveServer, listServers } from '../api';
 import { IconCritical, IconPending, IconRack, IconRefresh, IconSkipped, IconSuccess, IconWarning, TierIcon } from '../icons';
 import {
   CATEGORY_LABELS,
+  NEVER_HEARTBEAT_LABEL,
   onlineLabel,
   onlineTier,
   pillClassForTier,
@@ -125,7 +126,7 @@ export default function OverviewPage({ user, onOpenServer, onHeartbeatConfig }: 
       <div className="page-head">
         <div>
           <h1>Огляд</h1>
-          <p className="meta">{servers ? `${servers.length} серверів під наглядом` : 'Завантаження...'} · оновлюється щохвилини</p>
+          <p className="meta">{servers ? `${servers.length} серверів під наглядом` : 'Завантаження...'} · оновлюється кожні 30 секунд</p>
         </div>
       </div>
 
@@ -259,7 +260,9 @@ export default function OverviewPage({ user, onOpenServer, onHeartbeatConfig }: 
                 <th>{CATEGORY_LABELS.maintenance}</th>
                 <th>{CATEGORY_LABELS.health}</th>
                 <th>Останній контакт</th>
-                <th />
+                <th>
+                  <span className="visually-hidden">Дії</span>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -310,6 +313,11 @@ export default function OverviewPage({ user, onOpenServer, onHeartbeatConfig }: 
                     <td className="cell-meta">
                       {staleLevel === 'ok' ? (
                         formatTimestamp(server.last_heartbeat_at)
+                      ) : staleLevel === 'never' ? (
+                        <span className="stale-never" title="Сервер підтверджено, але жодного heartbeat від нього ще не надходило">
+                          <IconWarning />
+                          {NEVER_HEARTBEAT_LABEL}
+                        </span>
                       ) : (
                         <span
                           className={staleLevel === 'critical' ? 'stale-critical' : 'stale-warn'}

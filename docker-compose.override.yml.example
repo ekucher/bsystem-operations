@@ -1,0 +1,20 @@
+# Приклад локального dev-override для docker-compose.yml.
+#
+# Скопіюйте як `docker-compose.override.yml` у корені репозиторію (він у
+# .gitignore — лишається local-only, docker compose підхоплює його
+# автоматично поряд з docker-compose.yml). НЕ використовуйте цей файл
+# у production — він навмисно послаблює безпекові дефолти для зручності
+# локальної розробки по http без TLS.
+services:
+  api:
+    environment:
+      # api/src/config.ts за замовчуванням вимагає Secure-cookie (true).
+      # Це коректно для production за TLS-термінацією, але ламає логін
+      # у браузері, коли ви ходите на localhost по звичайному http.
+      # false — лише для цього випадку.
+      COOKIE_SECURE: "false"
+    # Розкоментуйте, якщо потрібен прямий доступ до API з хоста (curl,
+    # Postman) в обхід nginx-проксі `ui`-сервісу — у базовому
+    # docker-compose.yml цей порт навмисно не публікується.
+    # ports:
+    #   - "8081:8080"

@@ -43,19 +43,33 @@ export const EventPayload = z.object({
 });
 export type EventPayload = z.infer<typeof EventPayload>;
 
+// D2 (agent-enrollment hardening): the bootstrap secret travels ONLY as
+// the X-Bootstrap-Secret header now, for both POST /enroll and
+// GET /enroll/:serverId — one canonical transport for one credential,
+// instead of the body-vs-header split this schema used to encode.
 export const EnrollRequest = z.object({
   serverId: z.string().uuid(),
   institutionCode: z.string().min(1),
   productType: ProductType,
   hostname: z.string().min(1),
-  bootstrapSecret: z.string().min(1),
 });
 export type EnrollRequest = z.infer<typeof EnrollRequest>;
 
+// eventId/occurredAt/schemaVersion (E4/E5/E7): optional so pre-outbox
+// agents (no local envelope yet) keep working unchanged. When an agent
+// does supply eventId, the API guarantees UNIQUE(server_id, event_id) —
+// a retried POST for the same event is accepted idempotently, not
+// duplicated (see repository.insertEvent). occurredAt lets the dashboard
+// eventually distinguish "when it actually happened" from
+// "when the API received it" (createdAt) for an event delayed by a
+// durable local outbox during an outage.
 export const EventRequest = z.object({
   category: EventCategory,
   severity: Severity,
   payload: EventPayload,
+  eventId: z.string().min(1).max(200).optional(),
+  occurredAt: z.string().datetime().optional(),
+  schemaVersion: z.number().int().positive().optional(),
 });
 export type EventRequest = z.infer<typeof EventRequest>;
 
@@ -76,3 +90,53 @@ export const LoginRequest = z.object({
   password: z.string().min(1),
 });
 export type LoginRequest = z.infer<typeof LoginRequest>;
+
+// Minimum password policy for local accounts (create-admin CLI — see
+// src/cli/create-admin.ts, the only place a password is ever set). Not
+// applied to login: an existing weak password from before this policy
+// existed must still be allowed to authenticate, only new/changed
+// passwords are gated. Deliberately no composition rules (forced
+// uppercase/digit/special-char) — length plus a denylist of the
+// passwords attackers try first buys most of the real protection
+// without the usability cost.
+const COMMON_WEAK_PASSWORDS = new Set([
+  'password',
+  'password1',
+  'password123',
+  'password1234',
+  '123456789',
+  '1234567890',
+  '12345678910',
+  'qwertyuiop',
+  'qwertyuiop12',
+  'qwertyuiop123',
+  'letmein12345',
+  'admin123456',
+  'administrator',
+  'changeme123',
+  'welcome12345',
+]);
+
+// D4 (agent-enrollment hardening): audit trail for admin-initiated
+// lifecycle changes on a server row.
+export const AdminActionType = z.enum(['approve', 'revoke', 'reissue']);
+export type AdminActionType = z.infer<typeof AdminActionType>;
+
+// Optional free-text reason attached to a revoke/reissue admin action.
+export const RevokeRequest = z.object({
+  reason: z.string().min(1).optional(),
+});
+export type RevokeRequest = z.infer<typeof RevokeRequest>;
+
+export const ReissueRequest = z.object({
+  reason: z.string().min(1).optional(),
+});
+export type ReissueRequest = z.infer<typeof ReissueRequest>;
+
+export const NewPassword = z
+  .string()
+  .min(12, 'Password must be at least 12 characters long.')
+  .refine((value) => !COMMON_WEAK_PASSWORDS.has(value.toLowerCase()), {
+    message: 'Password is too common/predictable — choose a less guessable one.',
+  });
+export type NewPassword = z.infer<typeof NewPassword>;

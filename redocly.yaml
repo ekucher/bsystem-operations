@@ -1,0 +1,30 @@
+# Config for `npx @redocly/cli lint api/docs/openapi.yaml` (F8 CI step,
+# see .github/workflows/ci.yml). Extends the built-in recommended
+# ruleset but turns off two checks that don't fit this project's current
+# stage rather than either failing CI on cosmetic noise or disabling
+# linting altogether:
+#
+# - operation-operationId: this spec documents behavior for humans (and
+#   the F8 targeted parity test), not for codegen — machine-generated
+#   operationIds would be pure churn.
+# - no-unused-components: ServerStatus/UserRole are referenced from prose
+#   (server rows / /auth/me shape) but the corresponding response bodies
+#   are intentionally loose (`type: object`, no $ref) rather than fully
+#   typed yet — see api/docs/openapi.yaml's /admin/servers* responses.
+#   Fully typing every response is a bigger, separate documentation
+#   effort; until then this rule would just nag on every lint run.
+#
+# Every other recommended rule (security-defined, valid $ref, duplicate
+# paths, etc.) stays on — those catch real spec errors.
+apis:
+  main:
+    root: api/docs/openapi.yaml
+extends:
+  - recommended
+rules:
+  operation-operationId: off
+  no-unused-components: off
+  # No repo LICENSE file exists yet (explicit decision point for the repo
+  # owner — see docs/REPOSITORY_GOVERNANCE.md); until that's resolved,
+  # this spec has nothing accurate to put in `info.license`.
+  info-license: off

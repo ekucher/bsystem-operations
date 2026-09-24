@@ -5,26 +5,39 @@ import type { Express } from 'express';
 import type { OperationsRepository } from '../repository.js';
 
 async function loginAsAdmin(app: Express, repository: OperationsRepository) {
-  createTestUser(repository, 'admin', 'test-password', 'admin');
+  await createTestUser(repository, 'admin', 'test-password', 'admin');
   const agent = request.agent(app);
   await agent.post('/api/v1/auth/login').send({ username: 'admin', password: 'test-password' });
   return agent;
 }
 
-async function enrollApproveAndGetKey(app: Express, admin: request.SuperAgentTest, serverId: string): Promise<string> {
-  await request(app)
+async function loginAsViewer(app: Express, repository: OperationsRepository) {
+  await createTestUser(repository, 'viewer', 'test-password', 'viewer');
+  const agent = request.agent(app);
+  await agent.post('/api/v1/auth/login').send({ username: 'viewer', password: 'test-password' });
+  return agent;
+}
+
+async function enrollAndGetClaim(app: Express, serverId: string): Promise<string> {
+  const res = await request(app)
     .post('/api/v1/enroll')
+    .set('X-Bootstrap-Secret', 'test-bootstrap-secret')
     .send({
       serverId,
       institutionCode: '01234567',
       productType: 'LIMS',
       hostname: `HOST-${serverId.slice(0, 8)}`,
-      bootstrapSecret: 'test-bootstrap-secret',
     });
+  return res.body.claimToken as string;
+}
+
+async function enrollApproveAndGetKey(app: Express, admin: request.SuperAgentTest, serverId: string): Promise<string> {
+  const claimToken = await enrollAndGetClaim(app, serverId);
   await admin.post(`/api/v1/admin/servers/${serverId}/approve`);
   const poll = await request(app)
     .get(`/api/v1/enroll/${serverId}`)
-    .set('X-Bootstrap-Secret', 'test-bootstrap-secret');
+    .set('X-Bootstrap-Secret', 'test-bootstrap-secret')
+    .set('X-Enrollment-Claim', claimToken);
   return poll.body.apiKey as string;
 }
 
@@ -79,17 +92,307 @@ describe('admin overview enrichment', () => {
     const serverId = '55555555-5555-4555-8555-555555555555';
     await request(app)
       .post('/api/v1/enroll')
+      .set('X-Bootstrap-Secret', 'test-bootstrap-secret')
       .send({
         serverId,
         institutionCode: '01234567',
         productType: 'LIMS',
         hostname: 'HOST-pending',
-        bootstrapSecret: 'test-bootstrap-secret',
       });
 
     const overview = await admin.get('/api/v1/admin/servers');
     const server = overview.body.servers.find((s: { id: string }) => s.id === serverId);
     expect(server.status).toBe('pending');
     expect(server.isOnline).toBe(false);
+  });
+});
+
+// A1: a ServerRow carries api_key_hash/pending_api_key — internal-only
+// columns that must never reach a JSON response. These assert the
+// allow-list mapper (toPublicServer, see repository.ts) is actually
+// wired into both server-reading admin endpoints, for both roles that
+// can call them.
+describe('server responses never leak credential columns', () => {
+  const SENSITIVE_FIELD_PATTERN = /api_key_hash|pending_api_key|password_hash|session_token_hash/;
+
+  it.each(['admin', 'viewer'] as const)('excludes hash columns from GET /admin/servers for role=%s', async (role) => {
+    const { app, repository } = buildTestApp();
+    const actor = role === 'admin' ? await loginAsAdmin(app, repository) : await loginAsViewer(app, repository);
+    const admin = role === 'admin' ? actor : await loginAsAdmin(app, repository);
+    const serverId = '66666666-6666-4666-8666-666666666666';
+    await enrollApproveAndGetKey(app, admin, serverId);
+
+    const overview = await actor.get('/api/v1/admin/servers');
+    expect(overview.status).toBe(200);
+    expect(JSON.stringify(overview.body)).not.toMatch(SENSITIVE_FIELD_PATTERN);
+    const server = overview.body.servers.find((s: { id: string }) => s.id === serverId);
+    // Positive assertion: legitimate fields still make it through the
+    // allow-list, this isn't just an empty/broken object.
+    expect(server).toMatchObject({ id: serverId, status: 'approved', hostname: `HOST-${serverId.slice(0, 8)}` });
+  });
+
+  it.each(['admin', 'viewer'] as const)('excludes hash columns from GET /admin/servers/:id for role=%s', async (role) => {
+    const { app, repository } = buildTestApp();
+    const actor = role === 'admin' ? await loginAsAdmin(app, repository) : await loginAsViewer(app, repository);
+    const admin = role === 'admin' ? actor : await loginAsAdmin(app, repository);
+    const serverId = '77777777-7777-4777-8777-777777777777';
+    await enrollApproveAndGetKey(app, admin, serverId);
+
+    const detail = await actor.get(`/api/v1/admin/servers/${serverId}`);
+    expect(detail.status).toBe(200);
+    expect(JSON.stringify(detail.body)).not.toMatch(SENSITIVE_FIELD_PATTERN);
+    expect(detail.body.server).toMatchObject({ id: serverId, status: 'approved' });
+  });
+
+  it('excludes hash columns from the approve response', async () => {
+    const { app, repository } = buildTestApp();
+    const admin = await loginAsAdmin(app, repository);
+    const serverId = '88888888-8888-4888-8888-888888888888';
+    await request(app)
+      .post('/api/v1/enroll')
+      .set('X-Bootstrap-Secret', 'test-bootstrap-secret')
+      .send({
+        serverId,
+        institutionCode: '01234567',
+        productType: 'LIMS',
+        hostname: 'HOST-approve',
+      });
+    const res = await admin.post(`/api/v1/admin/servers/${serverId}/approve`);
+    expect(res.status).toBe(200);
+    expect(JSON.stringify(res.body)).not.toMatch(SENSITIVE_FIELD_PATTERN);
+  });
+});
+
+// A6: Origin validation on the mutating (session-cookie-authed) approve
+// route. A present-but-cross-origin request must be rejected even though
+// the caller has a perfectly valid admin session — that's exactly the
+// CSRF scenario (a forged form/fetch on another site riding the victim's
+// cookie).
+describe('CSRF Origin check on mutating admin routes', () => {
+  it('rejects approve when Origin does not match the request Host', async () => {
+    const { app, repository } = buildTestApp();
+    const admin = await loginAsAdmin(app, repository);
+    const serverId = '99999999-9999-4999-8999-999999999999';
+    await request(app)
+      .post('/api/v1/enroll')
+      .set('X-Bootstrap-Secret', 'test-bootstrap-secret')
+      .send({
+        serverId,
+        institutionCode: '01234567',
+        productType: 'LIMS',
+        hostname: 'HOST-csrf',
+      });
+
+    const res = await admin.post(`/api/v1/admin/servers/${serverId}/approve`).set('Origin', 'https://evil.example');
+    expect(res.status).toBe(403);
+  });
+
+  it('allows approve with no Origin header at all (non-browser clients)', async () => {
+    const { app, repository } = buildTestApp();
+    const admin = await loginAsAdmin(app, repository);
+    const serverId = '10101010-1010-4101-8101-101010101010';
+    await request(app)
+      .post('/api/v1/enroll')
+      .set('X-Bootstrap-Secret', 'test-bootstrap-secret')
+      .send({
+        serverId,
+        institutionCode: '01234567',
+        productType: 'LIMS',
+        hostname: 'HOST-no-origin',
+      });
+
+    const res = await admin.post(`/api/v1/admin/servers/${serverId}/approve`);
+    expect(res.status).toBe(200);
+  });
+});
+
+// D4: credential lifecycle — revoke / reissue, and their audit trail.
+describe('revoke / reissue lifecycle (D4)', () => {
+  it('revokes an approved server: status flips, key hash cleared, key stops authenticating', async () => {
+    const { app, repository } = buildTestApp();
+    const admin = await loginAsAdmin(app, repository);
+    const serverId = '20202020-2020-4202-8202-202020202020';
+    const apiKey = await enrollApproveAndGetKey(app, admin, serverId);
+
+    const revokeRes = await admin.post(`/api/v1/admin/servers/${serverId}/revoke`).send({ reason: 'lost device' });
+    expect(revokeRes.status).toBe(200);
+    expect(revokeRes.body).toEqual({ status: 'revoked' });
+
+    const server = repository.getServer(serverId);
+    expect(server?.status).toBe('revoked');
+    expect(server?.api_key_hash).toBeNull();
+
+    const eventRes = await request(app)
+      .post('/api/v1/events')
+      .set('X-Api-Key', apiKey)
+      .send({ category: 'backup', severity: 'SUCCESS', payload: { message: 'still trying' } });
+    expect(eventRes.status).toBe(401);
+
+    const heartbeatRes = await request(app).post('/api/v1/heartbeat').set('X-Api-Key', apiKey).send({});
+    expect(heartbeatRes.status).toBe(401);
+  });
+
+  it('allows rejecting a pending enrollment via revoke', async () => {
+    const { app, repository } = buildTestApp();
+    const admin = await loginAsAdmin(app, repository);
+    const serverId = '21212121-2121-4212-8212-212121212121';
+    await enrollAndGetClaim(app, serverId);
+
+    const revokeRes = await admin.post(`/api/v1/admin/servers/${serverId}/revoke`);
+    expect(revokeRes.status).toBe(200);
+    expect(repository.getServer(serverId)?.status).toBe('revoked');
+  });
+
+  it('rejects revoking an already-revoked server with 409', async () => {
+    const { app, repository } = buildTestApp();
+    const admin = await loginAsAdmin(app, repository);
+    const serverId = '22222222-2020-4202-8202-202020202022';
+    await enrollApproveAndGetKey(app, admin, serverId);
+    await admin.post(`/api/v1/admin/servers/${serverId}/revoke`);
+
+    const res = await admin.post(`/api/v1/admin/servers/${serverId}/revoke`);
+    expect(res.status).toBe(409);
+  });
+
+  it('rejects revoke/reissue from a viewer session and with no session', async () => {
+    const { app, repository } = buildTestApp();
+    const admin = await loginAsAdmin(app, repository);
+    const viewer = await loginAsViewer(app, repository);
+    const serverId = '23232323-2323-4232-8232-232323232323';
+    await enrollApproveAndGetKey(app, admin, serverId);
+
+    const noSession = await request(app).post(`/api/v1/admin/servers/${serverId}/revoke`);
+    expect(noSession.status).toBe(401);
+    const viewerRevoke = await viewer.post(`/api/v1/admin/servers/${serverId}/revoke`);
+    expect(viewerRevoke.status).toBe(403);
+    const viewerReissue = await viewer.post(`/api/v1/admin/servers/${serverId}/reissue`);
+    expect(viewerReissue.status).toBe(403);
+  });
+
+  it('reissues a fresh key for an approved server, invalidating the old one', async () => {
+    const { app, repository } = buildTestApp();
+    const admin = await loginAsAdmin(app, repository);
+    const serverId = '24242424-2424-4242-8242-242424242424';
+    const oldKey = await enrollApproveAndGetKey(app, admin, serverId);
+
+    const reissueRes = await admin.post(`/api/v1/admin/servers/${serverId}/reissue`);
+    expect(reissueRes.status).toBe(200);
+    expect(reissueRes.body.status).toBe('approved');
+    const newKey = reissueRes.body.apiKey as string;
+    expect(typeof newKey).toBe('string');
+    expect(newKey).not.toBe(oldKey);
+
+    const oldKeyEvent = await request(app)
+      .post('/api/v1/events')
+      .set('X-Api-Key', oldKey)
+      .send({ category: 'backup', severity: 'SUCCESS', payload: { message: 'old key' } });
+    expect(oldKeyEvent.status).toBe(401);
+
+    const newKeyEvent = await request(app)
+      .post('/api/v1/events')
+      .set('X-Api-Key', newKey)
+      .send({ category: 'backup', severity: 'SUCCESS', payload: { message: 'new key' } });
+    expect(newKeyEvent.status).toBe(202);
+
+    expect(repository.getServer(serverId)?.status).toBe('approved');
+  });
+
+  it('reissue performs a controlled un-revoke: a revoked server becomes approved again with a new key', async () => {
+    const { app, repository } = buildTestApp();
+    const admin = await loginAsAdmin(app, repository);
+    const serverId = '25252525-2525-4252-8252-252525252525';
+    await enrollApproveAndGetKey(app, admin, serverId);
+    await admin.post(`/api/v1/admin/servers/${serverId}/revoke`);
+    expect(repository.getServer(serverId)?.status).toBe('revoked');
+
+    const reissueRes = await admin.post(`/api/v1/admin/servers/${serverId}/reissue`);
+    expect(reissueRes.status).toBe(200);
+    expect(reissueRes.body.status).toBe('approved');
+    expect(repository.getServer(serverId)?.status).toBe('approved');
+
+    const newKey = reissueRes.body.apiKey as string;
+    const eventRes = await request(app)
+      .post('/api/v1/events')
+      .set('X-Api-Key', newKey)
+      .send({ category: 'backup', severity: 'SUCCESS', payload: { message: 'un-revoked' } });
+    expect(eventRes.status).toBe(202);
+  });
+
+  it('rejects reissue for a still-pending server with 409', async () => {
+    const { app, repository } = buildTestApp();
+    const admin = await loginAsAdmin(app, repository);
+    const serverId = '26262626-2626-4262-8262-262626262626';
+    await enrollAndGetClaim(app, serverId);
+
+    const res = await admin.post(`/api/v1/admin/servers/${serverId}/reissue`);
+    expect(res.status).toBe(409);
+  });
+
+  it('records an audit row for approve/revoke/reissue and exposes it on the server detail endpoint', async () => {
+    const { app, repository } = buildTestApp();
+    const admin = await loginAsAdmin(app, repository);
+    const serverId = '27272727-2727-4272-8272-272727272727';
+    await enrollApproveAndGetKey(app, admin, serverId);
+    await admin.post(`/api/v1/admin/servers/${serverId}/revoke`).send({ reason: 'test revoke' });
+    await admin.post(`/api/v1/admin/servers/${serverId}/reissue`);
+
+    const detail = await admin.get(`/api/v1/admin/servers/${serverId}`);
+    expect(detail.status).toBe(200);
+    const actions = detail.body.recentActions as Array<{ action: string; reason: string | null }>;
+    expect(actions.map((a) => a.action)).toEqual(['reissue', 'revoke', 'approve']);
+    expect(actions.find((a) => a.action === 'revoke')?.reason).toBe('test revoke');
+  });
+
+  it('CSRF: rejects revoke/reissue when Origin does not match Host', async () => {
+    const { app, repository } = buildTestApp();
+    const admin = await loginAsAdmin(app, repository);
+    const serverId = '28282828-2828-4282-8282-282828282828';
+    await enrollApproveAndGetKey(app, admin, serverId);
+
+    const revoke = await admin
+      .post(`/api/v1/admin/servers/${serverId}/revoke`)
+      .set('Origin', 'https://evil.example');
+    expect(revoke.status).toBe(403);
+
+    const reissue = await admin
+      .post(`/api/v1/admin/servers/${serverId}/reissue`)
+      .set('Origin', 'https://evil.example');
+    expect(reissue.status).toBe(403);
+  });
+});
+
+// D7: deterministic behavior for a revoked server's agent across every
+// agent-facing route.
+describe('D7: revoked-server semantics are explicit and deterministic', () => {
+  it('a revoked server polling /enroll/:serverId gets 404, same as an unknown id', async () => {
+    const { app, repository } = buildTestApp();
+    const admin = await loginAsAdmin(app, repository);
+    const serverId = '29292929-2929-4292-8292-292929292929';
+    const claimToken = await enrollAndGetClaim(app, serverId);
+    await admin.post(`/api/v1/admin/servers/${serverId}/approve`);
+    await admin.post(`/api/v1/admin/servers/${serverId}/revoke`);
+
+    const res = await request(app)
+      .get(`/api/v1/enroll/${serverId}`)
+      .set('X-Bootstrap-Secret', 'test-bootstrap-secret')
+      .set('X-Enrollment-Claim', claimToken);
+    expect(res.status).toBe(404);
+  });
+
+  it('a revoked server cannot send events or heartbeats with its old key', async () => {
+    const { app, repository } = buildTestApp();
+    const admin = await loginAsAdmin(app, repository);
+    const serverId = '30303030-3030-4303-8303-303030303030';
+    const apiKey = await enrollApproveAndGetKey(app, admin, serverId);
+    await admin.post(`/api/v1/admin/servers/${serverId}/revoke`);
+
+    const eventRes = await request(app)
+      .post('/api/v1/events')
+      .set('X-Api-Key', apiKey)
+      .send({ category: 'backup', severity: 'SUCCESS', payload: { message: 'nope' } });
+    expect(eventRes.status).toBe(401);
+
+    const heartbeatRes = await request(app).post('/api/v1/heartbeat').set('X-Api-Key', apiKey).send({});
+    expect(heartbeatRes.status).toBe(401);
   });
 });

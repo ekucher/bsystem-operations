@@ -7,28 +7,32 @@ import type { Express } from 'express';
 const SERVER_ID = '22222222-2222-4222-8222-222222222222';
 
 async function enrollAndApprove(app: Express, repository: OperationsRepository): Promise<string> {
-  createTestUser(repository, 'admin', 'test-password', 'admin');
+  await createTestUser(repository, 'admin', 'test-password', 'admin');
   const admin = request.agent(app);
   await admin.post('/api/v1/auth/login').send({ username: 'admin', password: 'test-password' });
 
-  await request(app).post('/api/v1/enroll').send({
-    serverId: SERVER_ID,
-    institutionCode: '01234567',
-    productType: 'VETOFFICE',
-    hostname: 'HOUSE-VET-01',
-    bootstrapSecret: 'test-bootstrap-secret',
-  });
+  const enrollRes = await request(app)
+    .post('/api/v1/enroll')
+    .set('X-Bootstrap-Secret', 'test-bootstrap-secret')
+    .send({
+      serverId: SERVER_ID,
+      institutionCode: '01234567',
+      productType: 'VETOFFICE',
+      hostname: 'HOUSE-VET-01',
+    });
+  const claimToken = enrollRes.body.claimToken as string;
   await admin.post(`/api/v1/admin/servers/${SERVER_ID}/approve`);
   const poll = await request(app)
     .get(`/api/v1/enroll/${SERVER_ID}`)
-    .set('X-Bootstrap-Secret', 'test-bootstrap-secret');
+    .set('X-Bootstrap-Secret', 'test-bootstrap-secret')
+    .set('X-Enrollment-Claim', claimToken);
   return poll.body.apiKey as string;
 }
 
 // Detail-endpoint assertions below need an authenticated session too
 // (any role — GET /admin/servers/:id is read-only).
 async function loginAsViewer(app: Express, repository: OperationsRepository): Promise<request.SuperAgentTest> {
-  createTestUser(repository, 'viewer', 'test-password', 'viewer');
+  await createTestUser(repository, 'viewer', 'test-password', 'viewer');
   const agent = request.agent(app);
   await agent.post('/api/v1/auth/login').send({ username: 'viewer', password: 'test-password' });
   return agent;
@@ -93,6 +97,53 @@ describe('events + heartbeat ingest', () => {
     expect(detail.body.events[0].category).toBe('health');
     expect(JSON.parse(detail.body.events[0].payload).services).toHaveLength(3);
     expect(detail.body.latestByCategory.health.payload.services).toHaveLength(3);
+  });
+
+  it('E5: a retried POST with the same eventId is idempotent (not duplicated)', async () => {
+    const body = {
+      category: 'backup' as const,
+      severity: 'SUCCESS' as const,
+      payload: { message: 'генерація завершена' },
+      eventId: 'evt-0001',
+      occurredAt: '2026-09-24T10:00:00.000Z',
+    };
+    const first = await request(app).post('/api/v1/events').set('X-Api-Key', apiKey).send(body);
+    const retry = await request(app).post('/api/v1/events').set('X-Api-Key', apiKey).send(body);
+    expect(first.status).toBe(202);
+    expect(retry.status).toBe(202);
+
+    const viewer = await loginAsViewer(app, repository);
+    const detail = await viewer.get(`/api/v1/admin/servers/${SERVER_ID}`);
+    expect(detail.body.events).toHaveLength(1);
+  });
+
+  it('E5: the same eventId from a DIFFERENT server is not treated as a duplicate', async () => {
+    const otherServerId = '33333333-3333-4333-8333-333333333333';
+    const enrollRes = await request(app)
+      .post('/api/v1/enroll')
+      .set('X-Bootstrap-Secret', 'test-bootstrap-secret')
+      .send({ serverId: otherServerId, institutionCode: '01234567', productType: 'LIMS', hostname: 'HOUSE-LIMS-02' });
+    const claimToken = enrollRes.body.claimToken as string;
+    const admin = request.agent(app);
+    await admin.post('/api/v1/auth/login').send({ username: 'admin', password: 'test-password' });
+    await admin.post(`/api/v1/admin/servers/${otherServerId}/approve`);
+    const poll = await request(app)
+      .get(`/api/v1/enroll/${otherServerId}`)
+      .set('X-Bootstrap-Secret', 'test-bootstrap-secret')
+      .set('X-Enrollment-Claim', claimToken);
+    const otherApiKey = poll.body.apiKey as string;
+
+    const body = { category: 'backup' as const, severity: 'SUCCESS' as const, payload: { message: 'shared eventId' }, eventId: 'evt-shared' };
+    const resA = await request(app).post('/api/v1/events').set('X-Api-Key', apiKey).send(body);
+    const resB = await request(app).post('/api/v1/events').set('X-Api-Key', otherApiKey).send(body);
+    expect(resA.status).toBe(202);
+    expect(resB.status).toBe(202);
+
+    const viewer = await loginAsViewer(app, repository);
+    const detailA = await viewer.get(`/api/v1/admin/servers/${SERVER_ID}`);
+    const detailB = await viewer.get(`/api/v1/admin/servers/${otherServerId}`);
+    expect(detailA.body.events).toHaveLength(1);
+    expect(detailB.body.events).toHaveLength(1);
   });
 
   it('rejects a malformed event payload (missing message)', async () => {

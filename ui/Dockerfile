@@ -1,12 +1,17 @@
-FROM node:22-alpine AS build
+FROM node:22 AS build
 WORKDIR /app
-# npm workspaces monorepo: a single root package-lock.json describes the
-# whole tree, so `npm ci` always installs every workspace's dependencies
-# (npm has no per-workspace ci mode) — including the api workspace's
-# better-sqlite3, which compiles a native addon via node-gyp. That addon
-# is unused in this image (nginx serves only the built static assets),
-# but the toolchain is still required for npm ci to succeed here.
-RUN apk add --no-cache python3 make g++
+# Glibc build stage (not alpine): npm has a known optional-dependency
+# resolution bug (npm/cli#4828) that can skip installing the correct
+# musl-libc native binary (e.g. @rolldown/binding-linux-x64-musl, used by
+# vite's bundled rolldown) even though it's present in the lockfile,
+# depending on the platform `npm ci` last ran on. Building on glibc
+# sidesteps that bug entirely; it only affects this throwaway build
+# stage — the shipped image below is still the small alpine-based
+# unprivileged nginx runtime, so this doesn't change production attack
+# surface. (This also drops the need for python3/make/g++ here: the
+# api workspace's better-sqlite3 addon is unused in this image, but glibc
+# node images ship the toolchain needed for npm ci to succeed without
+# installing extra packages.)
 COPY package.json package-lock.json ./
 COPY api/package.json ./api/package.json
 COPY ui/package.json ./ui/package.json

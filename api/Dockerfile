@@ -25,6 +25,13 @@ RUN npm prune --omit=dev
 FROM node:22-alpine
 WORKDIR /app
 ENV NODE_ENV=production
+# Git revision the image was built from, surfaced by GET /health
+# (`revision`) for "which build is actually running" debugging. Passed
+# via docker-compose.yml's build.args (GIT_SHA:-unknown); "unknown" is a
+# legitimate value, not an error, when nothing supplies one (e.g. a
+# manual `docker build` without --build-arg).
+ARG GIT_SHA=unknown
+ENV GIT_SHA=$GIT_SHA
 COPY --from=build /app/package.json /app/package-lock.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/api/package.json ./api/package.json
@@ -40,6 +47,9 @@ RUN mkdir -p /data && chown node:node /data
 USER node
 WORKDIR /app/api
 EXPOSE 8080
+# /ready (not /health) on purpose: it actually queries the database, so
+# a container that's up but can't serve real traffic (e.g. DB file
+# locked/corrupt) is correctly reported unhealthy instead of "healthy".
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-  CMD wget -qO- http://127.0.0.1:8080/health || exit 1
+  CMD wget -qO- http://127.0.0.1:8080/ready || exit 1
 CMD ["node", "dist/index.js"]

@@ -5,9 +5,19 @@ on:
     branches: [main]
   pull_request:
 
+# Least-privilege default (F10): every job only needs to read the repo
+# checkout — none of them create releases, comment on PRs, or push
+# anything. Jobs that genuinely needed more would declare it themselves.
+permissions:
+  contents: read
+
 jobs:
   api:
     runs-on: ubuntu-latest
+    # typecheck+build+vitest for the api workspace normally finishes in
+    # well under 5 minutes; double that as headroom before CI treats a
+    # hang as a real timeout rather than waiting the default 6 hours.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -18,10 +28,16 @@ jobs:
       - run: npm ci
       - run: npm run typecheck --workspace=api
       - run: npm run build --workspace=api
+      # Picks up every src/**/*.test.ts file vitest discovers by default
+      # (no vitest.config.ts restricts the pattern) — this already
+      # includes Agent C's upgrade-path coverage (migrations.test.ts,
+      # db.backup-restore.test.ts) and F8's openapiEnrollParity.test.ts,
+      # so no separate CI wiring is needed for either (F7/F8).
       - run: npm test --workspace=api
 
   ui:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -33,3 +49,177 @@ jobs:
       - run: npm run typecheck --workspace=ui
       - run: npm run build --workspace=ui
       - run: npm test --workspace=ui
+
+  openapi-lint:
+    # F8: structural validation of api/docs/openapi.yaml. @redocly/cli
+    # catches real spec errors (missing security on an operation,
+    # dangling $refs, duplicate paths, ...) without adding a committed
+    # dependency — it runs via `npx` and is configured by the repo's own
+    # redocly.yaml (which also documents the two cosmetic rules this
+    # project intentionally leaves off, and why).
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npx --yes @redocly/cli@1 lint
+
+  supply-chain:
+    # F9: dependency + secret scanning. Split from api/ui so a scanner
+    # finding doesn't block on/get confused with the app build, and so
+    # this job's timeout can be sized for "network calls to advisory
+    # DBs", not "compile TypeScript".
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # gitleaks needs full history to scan past commits
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      # Gate on `critical` rather than `high`: checked for real on
+      # 2026-09-24 (`npm audit --audit-level=high` and `--audit-level=critical`
+      # both currently report "found 0 vulnerabilities" for this
+      # project's actual dependency tree — see the F6-F12 hardening
+      # report for the full command output). Gating on `critical` here
+      # is a forward-looking choice, not a workaround for a real finding
+      # today: this is a two-workspace project pulling in a large
+      # transitive dev-dependency tree (vite/vitest/etc.), and that tree
+      # routinely carries `moderate`/`high` advisories in transitive
+      # dev-only packages with no available fix upstream — those would
+      # make this gate permanently red (or force someone to silence it
+      # entirely) for risk that never reaches the shipped Docker images
+      # (multi-stage builds `npm prune --omit=dev` before the runtime
+      # stage). `critical` still fails CI on anything actually severe.
+      # Re-run `npm audit --audit-level=high` locally/periodically to
+      # triage anything below that bar by hand.
+      - run: npm audit --audit-level=critical
+      # gitleaks: no secret-scanning existed anywhere in this repo before
+      # (checked — no .gitleaks.toml, no CI step). Pinned to a commit SHA
+      # (not a floating major tag) because, unlike actions/* below, this
+      # is a third-party action with write-ish reach into the checkout;
+      # see the pinning rationale in the workflow comment further down.
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Container image scanning (e.g. Trivy) was considered for this
+      # task and deliberately skipped for now: this project ships two
+      # small, already-hardened images (non-root users, cap_drop: ALL,
+      # no-new-privileges, alpine bases patched at build time via `apk
+      # upgrade`) and adding a full image-scan step would mean either a
+      # slow every-PR scan of freshly-built images (this workflow doesn't
+      # otherwise build+push images) or a separate, more complex
+      # scheduled workflow — more CI surface than this project's current
+      # size justifies. Revisit if/when a registry-push workflow exists
+      # to scan the already-built artifact instead of rebuilding for it.
+
+  docker-e2e:
+    # F6: a real docker compose run — build both images, prove the
+    # fail-closed startup gate (B1) still holds, then walk the actual
+    # enroll-free admin path a human verified manually during this
+    # hardening effort (login -> /auth/me -> /admin/servers -> logout).
+    runs-on: ubuntu-latest
+    # Two image builds (one of them compiling better-sqlite3's native
+    # addon from source) plus container startup — budget generously
+    # rather than risk flaking on a slow runner.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Negative case — compose refuses to start without OPERATIONS_BOOTSTRAP_SECRET
+        # Proves Agent B's B1 fix (docker-compose.yml's
+        # `${OPERATIONS_BOOTSTRAP_SECRET:?err}`) stays enforced going
+        # forward, not just today. Deliberately does NOT set the
+        # variable in this step's environment.
+        run: |
+          set +e
+          docker compose -p ops-ci-negative up -d 2>negative-case.log
+          status=$?
+          set -e
+          cat negative-case.log
+          docker compose -p ops-ci-negative down -v --remove-orphans >/dev/null 2>&1 || true
+          if [ "$status" -eq 0 ]; then
+            echo "::error::docker compose up succeeded without OPERATIONS_BOOTSTRAP_SECRET set — fail-closed gate regressed"
+            exit 1
+          fi
+          grep -q "OPERATIONS_BOOTSTRAP_SECRET must be set" negative-case.log
+
+      - name: Start the stack with a throwaway, CI-only bootstrap secret
+        run: |
+          # Never real secrets — generated fresh per CI run and thrown
+          # away when the job ends; only ever used against this run's
+          # ephemeral containers. The admin password is generated here
+          # too (not a literal in this file) purely to avoid a
+          # password-shaped string sitting in source control — secret
+          # scanners flag it on sight even though it's meaningless
+          # outside this one throwaway container.
+          echo "OPERATIONS_BOOTSTRAP_SECRET=ci-throwaway-$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "CI_ADMIN_PASSWORD=Ci-$(openssl rand -hex 16)" >> "$GITHUB_ENV"
+
+      - name: Build images
+        run: docker compose -p ops-ci build
+
+      - name: Bring up the stack
+        run: |
+          # Layers docker-compose.override.yml.example on top of the base
+          # compose file — the same documented local-dev override
+          # (COOKIE_SECURE=false) a developer would use, needed here
+          # because this job talks to the stack over plain http, not TLS.
+          # Exercising the actual example file (not a CI-only copy of it)
+          # also doubles as a check that the example itself still works.
+          docker compose -f docker-compose.yml -f docker-compose.override.yml.example -p ops-ci up -d
+
+      - name: Wait for API readiness (bounded poll, not a blind sleep)
+        run: |
+          for i in $(seq 1 30); do
+            if docker compose -p ops-ci exec -T api wget -qO- http://127.0.0.1:8080/ready >/tmp/ready.json 2>/dev/null; then
+              echo "API ready after ${i} attempt(s):"
+              cat /tmp/ready.json
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::API did not become ready within the timeout"
+          docker compose -p ops-ci logs
+          exit 1
+
+      - name: Create a test admin account (non-interactive, CI-only credentials)
+        run: |
+          docker compose -p ops-ci exec -T api node dist/cli/create-admin.js \
+            --username ci-admin --password "$CI_ADMIN_PASSWORD" --role admin
+
+      - name: Log in, call authenticated endpoints, log out
+        run: |
+          set -e
+          curl -sf -c cookies.txt -H 'Content-Type: application/json' \
+            -d "{\"username\":\"ci-admin\",\"password\":\"$CI_ADMIN_PASSWORD\"}" \
+            http://localhost:8082/api/v1/auth/login
+
+          me="$(curl -sf -b cookies.txt http://localhost:8082/api/v1/auth/me)"
+          echo "$me"
+          echo "$me" | grep -q '"role":"admin"'
+
+          servers="$(curl -sf -b cookies.txt http://localhost:8082/api/v1/admin/servers)"
+          echo "$servers"
+
+          logout_status="$(curl -s -o /dev/null -w '%{http_code}' -b cookies.txt -X POST http://localhost:8082/api/v1/auth/logout)"
+          [ "$logout_status" = "204" ]
+
+          # The session cookie must actually be gone: the same
+          # now-logged-out cookie jar must no longer authenticate.
+          after_logout_status="$(curl -s -o /dev/null -w '%{http_code}' -b cookies.txt http://localhost:8082/api/v1/auth/me)"
+          [ "$after_logout_status" = "401" ]
+
+      - name: Dump container logs on failure
+        if: failure()
+        run: docker compose -p ops-ci logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose -p ops-ci down -v --remove-orphans

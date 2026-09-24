@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { logout, me } from './api';
+import { useEffect, useRef, useState } from 'react';
+import { logout, me, setSessionExpiredHandler } from './api';
 import LoginPage from './components/LoginPage';
 import OverviewPage from './components/OverviewPage';
 import ServerDetailPage from './components/ServerDetailPage';
@@ -20,7 +20,11 @@ export default function App() {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [view, setView] = useState<View>({ name: 'overview' });
   const [heartbeatConfig, setHeartbeatConfig] = useState<HeartbeatConfig | null>(null);
+  const [loginNotice, setLoginNotice] = useState<string | null>(null);
   const { theme, toggleTheme } = useTheme();
+
+  const authStateRef = useRef(authState);
+  authStateRef.current = authState;
 
   useEffect(() => {
     me()
@@ -31,10 +35,29 @@ export default function App() {
       .catch(() => setAuthState('anonymous'));
   }, []);
 
+  // Any protected call (overview/detail polling included) that comes back
+  // 401 while the app still believes it's authenticated means the session
+  // died server-side — drop straight back to the login screen instead of
+  // leaving whichever page happened to be open showing a generic fetch
+  // error. Ignored while 'checking'/'anonymous' — that's just the normal
+  // "not logged in yet" 401 from the startup me() call.
+  useEffect(() => {
+    setSessionExpiredHandler(() => {
+      if (authStateRef.current === 'authenticated') {
+        setUser(null);
+        setAuthState('anonymous');
+        setView({ name: 'overview' });
+        setLoginNotice('Сесія закінчилась, увійдіть знову.');
+      }
+    });
+    return () => setSessionExpiredHandler(null);
+  }, []);
+
   const handleLoggedIn = (loggedInUser: AuthUser): void => {
     setUser(loggedInUser);
     setAuthState('authenticated');
     setView({ name: 'overview' });
+    setLoginNotice(null);
   };
 
   const handleLogout = (): void => {
@@ -55,7 +78,7 @@ export default function App() {
   }
 
   if (authState === 'anonymous' || !user) {
-    return <LoginPage onLoggedIn={handleLoggedIn} theme={theme} onToggleTheme={toggleTheme} />;
+    return <LoginPage onLoggedIn={handleLoggedIn} theme={theme} onToggleTheme={toggleTheme} notice={loginNotice} />;
   }
 
   return (
