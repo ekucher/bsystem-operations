@@ -152,10 +152,15 @@ jobs:
 
       - name: Start the stack with a throwaway, CI-only bootstrap secret
         run: |
-          # Never a real secret — generated fresh per CI run and thrown
+          # Never real secrets — generated fresh per CI run and thrown
           # away when the job ends; only ever used against this run's
-          # ephemeral containers.
+          # ephemeral containers. The admin password is generated here
+          # too (not a literal in this file) purely to avoid a
+          # password-shaped string sitting in source control — secret
+          # scanners flag it on sight even though it's meaningless
+          # outside this one throwaway container.
           echo "OPERATIONS_BOOTSTRAP_SECRET=ci-throwaway-$(openssl rand -hex 32)" >> "$GITHUB_ENV"
+          echo "CI_ADMIN_PASSWORD=Ci-$(openssl rand -hex 16)" >> "$GITHUB_ENV"
 
       - name: Build images
         run: docker compose -p ops-ci build
@@ -187,13 +192,13 @@ jobs:
       - name: Create a test admin account (non-interactive, CI-only credentials)
         run: |
           docker compose -p ops-ci exec -T api node dist/cli/create-admin.js \
-            --username ci-admin --password "Ci-Test-Only-Password-2026" --role admin
+            --username ci-admin --password "$CI_ADMIN_PASSWORD" --role admin
 
       - name: Log in, call authenticated endpoints, log out
         run: |
           set -e
           curl -sf -c cookies.txt -H 'Content-Type: application/json' \
-            -d '{"username":"ci-admin","password":"Ci-Test-Only-Password-2026"}' \
+            -d "{\"username\":\"ci-admin\",\"password\":\"$CI_ADMIN_PASSWORD\"}" \
             http://localhost:8082/api/v1/auth/login
 
           me="$(curl -sf -b cookies.txt http://localhost:8082/api/v1/auth/me)"
