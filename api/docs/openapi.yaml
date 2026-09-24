@@ -28,7 +28,21 @@ components:
       type: apiKey
       in: header
       name: X-Api-Key
-      description: Виданий після approve — reveal-once через GET /enroll/{serverId}.
+      description: >
+        Виданий після approve/reissue. Спочатку доступний через
+        GET /enroll/{serverId} протягом обмеженого вікна (5 хв, TTL —
+        не reveal-once), або одразу в тілі відповіді POST
+        /admin/servers/{serverId}/reissue.
+    enrollmentClaim:
+      type: apiKey
+      in: header
+      name: X-Enrollment-Claim
+      description: >
+        Видається (і за потреби перевидається) у відповіді POST /enroll,
+        доки сервер ще pending. Прив'язує GET /enroll/{serverId} саме до
+        того enrollment-виклику, що його створив — володіння лише
+        bootstrapSecret більше не є достатнім для читання чужого ключа
+        за відомим/вгаданим GUID.
 
   schemas:
     ProductType:
@@ -120,7 +134,11 @@ paths:
 
   /enroll:
     post:
-      summary: Self-enrollment сервера (GUID + bootstrap-секрет)
+      summary: >
+        Self-enrollment сервера (GUID). Bootstrap-секрет передається
+        ТІЛЬКИ через заголовок X-Bootstrap-Secret (єдиний канонічний
+        транспорт для обох /enroll-маршрутів — раніше POST приймав його
+        в тілі, а GET у заголовку; тепер узгоджено).
       security:
         - bootstrapSecret: []
       requestBody:
@@ -129,7 +147,7 @@ paths:
           application/json:
             schema:
               type: object
-              required: [serverId, institutionCode, productType, hostname, bootstrapSecret]
+              required: [serverId, institutionCode, productType, hostname]
               properties:
                 serverId:
                   type: string
@@ -140,23 +158,37 @@ paths:
                   $ref: '#/components/schemas/ProductType'
                 hostname:
                   type: string
-                bootstrapSecret:
-                  type: string
       responses:
         '202':
-          description: Прийнято (idempotent — не скидає вже approved/revoked сервер назад у pending)
+          description: >
+            Прийнято. Поки сервер pending — ідемпотентно, повторний виклик
+            оновлює hostname/institutionCode і ПЕРЕВИДАЄ claimToken
+            (відповідь: { status, claimToken }). Після approve/revoke
+            ідентичність більше не мутується через цей маршрут — див. 409.
         '400':
           description: Невалідний запит
         '401':
-          description: Невірний bootstrap-секрет
+          description: Невірний bootstrap-секрет (передано не в тому заголовку, або взагалі не передано)
+        '409':
+          description: >
+            Сервер вже approved або revoked — повторний POST /enroll для
+            цього id більше не скидає й не переписує його ідентичність;
+            потрібна дія адміністратора (revoke/reissue).
         '503':
           description: Enrollment не сконфігуровано (OPERATIONS_BOOTSTRAP_SECRET відсутній)
 
   /enroll/{serverId}:
     get:
-      summary: Поллінг статусу enrollment; apiKey повертається РІВНО ОДИН РАЗ одразу після approve
+      summary: >
+        Поллінг статусу enrollment. apiKey повертається, поки не минув
+        TTL (5 хв від approve/reissue) — це НЕ reveal-once: той самий
+        claim може повторно прочитати ключ у межах вікна, щоб пережити
+        втрачену відповідь. Вимагає ОБИДВА: X-Bootstrap-Secret (весь
+        флот) і X-Enrollment-Claim (саме цей enrollment, з відповіді
+        POST /enroll).
       security:
         - bootstrapSecret: []
+        - enrollmentClaim: []
       parameters:
         - name: serverId
           in: path
@@ -164,13 +196,22 @@ paths:
           schema:
             type: string
             format: uuid
+        - name: X-Enrollment-Claim
+          in: header
+          required: true
+          schema:
+            type: string
       responses:
         '200':
-          description: Статус (+ apiKey, лише одразу після approve)
+          description: Статус (+ apiKey, лише поки approved і в межах TTL-вікна)
         '401':
           description: Невірний bootstrap-секрет
         '404':
-          description: Сервер не зареєстрований
+          description: >
+            Сервер не знайдений, АБО revoked, АБО claim відсутній/невірний —
+            навмисно одна й та сама відповідь для всіх трьох випадків,
+            щоб володіння лише bootstrap-секретом не давало змоги
+            відрізнити "не існує" від "чужий/відкликаний enrollment".
 
   /admin/servers:
     get:
@@ -191,7 +232,9 @@ paths:
     get:
       summary: >
         Деталі сервера для detail-режиму (Etap 3): останні 1000 подій,
-        latestByCategory, isOnline. Доступно admin і viewer.
+        latestByCategory, isOnline, і (з D4) recentActions — до 20
+        останніх записів admin_actions (approve/revoke/reissue) для
+        цього сервера. Доступно admin і viewer.
       security:
         - sessionCookie: []
       parameters:
@@ -203,7 +246,7 @@ paths:
             format: uuid
       responses:
         '200':
-          description: Сервер, latestByCategory і його події
+          description: Сервер, latestByCategory, його події та recentActions
         '401':
           description: Немає активної сесії
         '404':
@@ -232,6 +275,87 @@ paths:
           description: Не знайдено
         '409':
           description: Сервер не у статусі pending
+
+  /admin/servers/{serverId}/revoke:
+    post:
+      summary: >
+        Відкликати сервер (D4). Дійсно з pending (відхилити enrollment)
+        або approved (вимкнути активного агента). Очищає api_key_hash,
+        pending_api_key і enrollment_claim_hash — жодним чином не може
+        далі автентифікуватись чи бути опитаним. Лише роль admin. Пише
+        рядок в admin_actions.
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: serverId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: Revoked
+        '400':
+          description: Невалідний запит
+        '401':
+          description: Немає активної сесії
+        '403':
+          description: Сесія є, але роль не admin
+        '404':
+          description: Не знайдено
+        '409':
+          description: Сервер вже revoked
+
+  /admin/servers/{serverId}/reissue:
+    post:
+      summary: >
+        Видати новий API-ключ (D4): ротація для approved (скомпрометований
+        /втрачений ключ) або контрольоване un-revoke для revoked сервера
+        (лише за явною дією admin, ніколи автоматично). Новий ключ
+        повертається одразу у відповіді (це вже автентифікована
+        admin-дія, не self-service агента). Лише роль admin. Пише рядок
+        в admin_actions.
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: serverId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: '{ status: "approved", apiKey }'
+        '400':
+          description: Невалідний запит
+        '401':
+          description: Немає активної сесії
+        '403':
+          description: Сесія є, але роль не admin
+        '404':
+          description: Не знайдено
+        '409':
+          description: Сервер ще pending — спершу approve
 
   /events:
     post:

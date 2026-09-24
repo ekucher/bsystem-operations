@@ -81,15 +81,25 @@ dist/cli/create-admin.js --username <ім'я> --password <пароль> --role a
 Контракт — `api/docs/openapi.yaml`. Потік self-enrollment (Etap 1):
 
 1. Агент генерує GUID, викликає `POST /api/v1/enroll` з
-   `bootstrapSecret` → сервер отримує статус `pending`.
+   `X-Bootstrap-Secret` (заголовок — єдиний канонічний транспорт для
+   обох `/enroll`-маршрутів) → сервер отримує статус `pending`, а
+   відповідь містить одноразово видане `claimToken` (агент має його
+   зберегти — саме воно потім прив'язує поллінг до ЦЬОГО enrollment).
 2. Адміністратор підтверджує сервер у dashboard (approve-кнопка на
    overview) або напряму `POST /api/v1/admin/servers/{id}/approve`
    (сесія з роллю `admin`).
-3. Агент поллить `GET /api/v1/enroll/{id}` (`X-Bootstrap-Secret`) —
-   API-ключ повертається **рівно один раз** одразу після approve
-   (reveal-once).
+3. Агент поллить `GET /api/v1/enroll/{id}` з ОБОМА заголовками —
+   `X-Bootstrap-Secret` і `X-Enrollment-Claim` (значення claimToken).
+   API-ключ доступний протягом обмеженого TTL-вікна (5 хв) після
+   approve/reissue — не reveal-once: той самий claim може повторно
+   прочитати ключ у межах вікна, якщо перша відповідь загубилась.
 4. Далі агент відправляє `POST /api/v1/events` і `POST /api/v1/heartbeat`
    з `X-Api-Key`.
+5. Адміністратор може `POST /api/v1/admin/servers/{id}/revoke` (пending
+   або approved → revoked, ключ одразу перестає працювати) або
+   `POST /api/v1/admin/servers/{id}/reissue` (нова пара ключа; controlled
+   un-revoke, якщо сервер був revoked) — обидва лише для ролі `admin`,
+   пишуть аудит-рядок в `admin_actions`.
 
 `GET /api/v1/admin/servers` і `GET /api/v1/admin/servers/{id}` (Etap 3) —
 збагачені дані для dashboard: `isOnline` (розраховується з

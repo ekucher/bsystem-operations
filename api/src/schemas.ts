@@ -43,12 +43,15 @@ export const EventPayload = z.object({
 });
 export type EventPayload = z.infer<typeof EventPayload>;
 
+// D2 (agent-enrollment hardening): the bootstrap secret travels ONLY as
+// the X-Bootstrap-Secret header now, for both POST /enroll and
+// GET /enroll/:serverId — one canonical transport for one credential,
+// instead of the body-vs-header split this schema used to encode.
 export const EnrollRequest = z.object({
   serverId: z.string().uuid(),
   institutionCode: z.string().min(1),
   productType: ProductType,
   hostname: z.string().min(1),
-  bootstrapSecret: z.string().min(1),
 });
 export type EnrollRequest = z.infer<typeof EnrollRequest>;
 
@@ -102,6 +105,22 @@ const COMMON_WEAK_PASSWORDS = new Set([
   'changeme123',
   'welcome12345',
 ]);
+
+// D4 (agent-enrollment hardening): audit trail for admin-initiated
+// lifecycle changes on a server row.
+export const AdminActionType = z.enum(['approve', 'revoke', 'reissue']);
+export type AdminActionType = z.infer<typeof AdminActionType>;
+
+// Optional free-text reason attached to a revoke/reissue admin action.
+export const RevokeRequest = z.object({
+  reason: z.string().min(1).optional(),
+});
+export type RevokeRequest = z.infer<typeof RevokeRequest>;
+
+export const ReissueRequest = z.object({
+  reason: z.string().min(1).optional(),
+});
+export type ReissueRequest = z.infer<typeof ReissueRequest>;
 
 export const NewPassword = z
   .string()

@@ -13,6 +13,34 @@ export function hashSecret(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
+// Per-enrollment claim (D1): a random opaque token the API hands back
+// from POST /enroll and stores only as a hashSecret() digest
+// (servers.enrollment_claim_hash) — same "never persist the plaintext"
+// discipline as generateApiKey/hashSecret above. Proves "you're the
+// specific agent that enrolled THIS server id", independent of the
+// fleet-wide bootstrap secret every agent holds.
+export function generateClaimToken(): string {
+  return `claim_${randomBytes(32).toString('hex')}`;
+}
+
+// Constant-time comparison of two already-hashed (hex digest) values —
+// for comparing a freshly hashSecret()'d caller-provided token against a
+// stored hash column (e.g. enrollment_claim_hash) without a timing side
+// channel on the comparison itself. Distinct from secretsMatch, which
+// hashes its own inputs first and is for comparing two *plaintext*
+// secrets (e.g. the bootstrap secret against the configured one).
+export function hashesMatch(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) {
+    return false;
+  }
+  const bufA = Buffer.from(a, 'hex');
+  const bufB = Buffer.from(b, 'hex');
+  if (bufA.length === 0 || bufB.length === 0 || bufA.length !== bufB.length) {
+    return false;
+  }
+  return timingSafeEqual(bufA, bufB);
+}
+
 // Compares two secrets without leaking timing information about where
 // they first differ. Hashing both to a fixed 32-byte digest first also
 // avoids the length-based short-circuit that a naive
