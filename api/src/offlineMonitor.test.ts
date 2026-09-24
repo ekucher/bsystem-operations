@@ -93,6 +93,7 @@ describe('runOfflineCheck', () => {
       institutionCode: '01234567',
       productType: 'LIMS',
       hostname: 'HOUSE-LIMS-01',
+      claim: 'test-claim',
       now: isoMinutesAgo(1000),
     });
     repository.approveServer(SERVER_ID, 'plain-key', 'hash', isoMinutesAgo(1000));
@@ -115,6 +116,7 @@ describe('runOfflineCheck', () => {
       institutionCode: '01234567',
       productType: 'LIMS',
       hostname: 'HOUSE-LIMS-01',
+      claim: 'test-claim',
       now: isoMinutesAgo(1000),
     });
     repository.approveServer(SERVER_ID, 'plain-key', 'hash', isoMinutesAgo(1000));
@@ -142,6 +144,7 @@ describe('runOfflineCheck', () => {
       institutionCode: '01234567',
       productType: 'LIMS',
       hostname: 'HOUSE-LIMS-01',
+      claim: 'test-claim',
       now: isoMinutesAgo(1000),
     });
     repository.approveServer(SERVER_ID, 'plain-key', 'hash', isoMinutesAgo(1000));
@@ -167,6 +170,7 @@ describe('runOfflineCheck', () => {
       institutionCode: '01234567',
       productType: 'LIMS',
       hostname: 'HOUSE-LIMS-01',
+      claim: 'test-claim',
       now: isoMinutesAgo(1000),
     });
     repository.approveServer(SERVER_ID, 'plain-key', 'hash', isoMinutesAgo(1000));

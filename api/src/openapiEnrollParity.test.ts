@@ -41,11 +41,24 @@ describe('openapi.yaml <-> schemas.ts parity: enrollment endpoints', () => {
     expect(documentedRequired).toEqual(zodRequired);
   });
 
-  it('documents X-Bootstrap-Secret as the only auth for POST /enroll (D2: header-only transport)', () => {
-    const security = doc.paths['/enroll'].post.security;
-    expect(security).toEqual([{ bootstrapSecret: [] }]);
+  it('documents X-Bootstrap-Secret as a header-only credential (D2)', () => {
     expect(doc.components.securitySchemes.bootstrapSecret.name).toBe('X-Bootstrap-Secret');
     expect(doc.components.securitySchemes.bootstrapSecret.in).toBe('header');
+  });
+
+  // A1/A2 (Wave 2): POST /enroll now requires BOTH the bootstrap secret
+  // AND an agent-generated enrollment claim together (a single security
+  // requirement object with both keys means AND, not two alternative
+  // requirement objects which would mean OR).
+  it('documents POST /enroll as requiring bootstrapSecret AND enrollmentClaim together', () => {
+    const security = doc.paths['/enroll'].post.security;
+    expect(security).toEqual([{ bootstrapSecret: [], enrollmentClaim: [] }]);
+
+    const claimParam = (doc.paths['/enroll'].post.parameters ?? []).find(
+      (p: { name?: string; in?: string }) => p.name === 'X-Enrollment-Claim' && p.in === 'header',
+    );
+    expect(claimParam).toBeDefined();
+    expect(claimParam.required).toBe(true);
   });
 
   it('documents the 409 already_finalized response for POST /enroll (D6)', () => {
@@ -53,10 +66,10 @@ describe('openapi.yaml <-> schemas.ts parity: enrollment endpoints', () => {
     expect(Object.keys(responses)).toEqual(expect.arrayContaining(['202', '400', '401', '409', '503']));
   });
 
-  it('documents GET /enroll/{serverId} as requiring both bootstrapSecret and enrollmentClaim (D1)', () => {
+  it('documents GET /enroll/{serverId} as requiring both bootstrapSecret and enrollmentClaim together (D1)', () => {
     const getOp = doc.paths['/enroll/{serverId}'].get;
     const security = getOp.security;
-    expect(security).toEqual(expect.arrayContaining([{ bootstrapSecret: [] }, { enrollmentClaim: [] }]));
+    expect(security).toEqual([{ bootstrapSecret: [], enrollmentClaim: [] }]);
     expect(doc.components.securitySchemes.enrollmentClaim.name).toBe('X-Enrollment-Claim');
 
     // The claim also has to show up as an explicit path-level header
@@ -71,5 +84,12 @@ describe('openapi.yaml <-> schemas.ts parity: enrollment endpoints', () => {
   it('documents the collapsed 404 for GET /enroll/{serverId} (D7: unknown/revoked/bad-claim indistinguishable)', () => {
     const responses = doc.paths['/enroll/{serverId}'].get.responses;
     expect(Object.keys(responses)).toEqual(expect.arrayContaining(['200', '401', '404']));
+  });
+
+  // A5: both enrollment endpoints must document 503 for "not configured"
+  // as distinct from 401 "wrong secret".
+  it('documents 503 enrollment_not_configured for both /enroll endpoints', () => {
+    expect(Object.keys(doc.paths['/enroll'].post.responses)).toEqual(expect.arrayContaining(['503']));
+    expect(Object.keys(doc.paths['/enroll/{serverId}'].get.responses)).toEqual(expect.arrayContaining(['503']));
   });
 });

@@ -127,6 +127,7 @@ describe('runMigrations — fresh empty DB', () => {
       institutionCode: '01234567',
       productType: 'VETOFFICE',
       hostname: 'HOUSE-VET-01',
+      claim: 'test-claim',
       now: '2026-01-01T00:00:00.000Z',
     });
     expect(result.outcome).toBe('created');
