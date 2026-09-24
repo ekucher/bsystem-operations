@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
@@ -134,10 +134,13 @@ describe('App', () => {
     await user.click(screen.getByText('HOUSE-LIMS-01'));
 
     await waitFor(() => {
-      expect(screen.getByText('архів OK')).toBeInTheDocument();
+      // "архів OK" з'являється і в картці "Поточний стан", і в "Історії
+      // подій" (той самий останній backup-event) — звужуємо пошук до
+      // списку подій, щоб уникнути колізії з двома збігами.
+      expect(within(screen.getByRole('list')).getByText('архів OK')).toBeInTheDocument();
     });
 
-    await user.click(screen.getByRole('button', { name: '← Назад до списку' }));
+    await user.click(screen.getByRole('button', { name: 'Назад до списку' }));
     await waitFor(() => expect(screen.getByText('HOUSE-LIMS-01')).toBeInTheDocument());
   });
 
