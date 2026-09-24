@@ -9,7 +9,7 @@ const SERVER_ID = '11111111-1111-4111-8111-111111111111';
 // Etap 3 replaced the interim X-Admin-Key with local-account sessions
 // (see auth.ts) — approve now requires a logged-in 'admin' user.
 async function loginAsAdmin(app: Express, repository: OperationsRepository): Promise<request.SuperAgentTest> {
-  createTestUser(repository, 'admin', 'test-password', 'admin');
+  await createTestUser(repository, 'admin', 'test-password', 'admin');
   const agent = request.agent(app);
   await agent.post('/api/v1/auth/login').send({ username: 'admin', password: 'test-password' });
   return agent;
@@ -94,7 +94,7 @@ describe('enrollment flow', () => {
 
   it('rejects approve attempts from a viewer-role session', async () => {
     const { app, repository } = buildTestApp();
-    createTestUser(repository, 'viewer', 'test-password', 'viewer');
+    await createTestUser(repository, 'viewer', 'test-password', 'viewer');
     const agent = request.agent(app);
     await agent.post('/api/v1/auth/login').send({ username: 'viewer', password: 'test-password' });
     await request(app).post('/api/v1/enroll').send(enrollBody());

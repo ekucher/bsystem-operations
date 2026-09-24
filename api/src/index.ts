@@ -1,4 +1,5 @@
 import { createApp } from './app.js';
+import { scheduleSessionCleanup } from './auth.js';
 import { loadConfig } from './config.js';
 import { openDb } from './db.js';
 import { OperationsRepository } from './repository.js';
@@ -18,6 +19,7 @@ const app = createApp(repository, config);
 
 scheduleRetentionCleanup(repository, config.eventRetentionDays);
 scheduleOfflineMonitor(repository, config);
+scheduleSessionCleanup(repository);
 
 app.listen(config.port, () => {
   // eslint-disable-next-line no-console

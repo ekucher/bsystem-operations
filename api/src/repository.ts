@@ -40,6 +40,39 @@ export interface SessionWithUser {
   user: UserRow;
 }
 
+// Allow-list for anything a ServerRow-shaped object ships to an HTTP
+// response. api_key_hash / pending_api_key deliberately have no
+// counterpart here — a server row must never be spread directly into
+// res.json() (see routes/admin.ts), or a hash (or the reveal-once
+// plaintext key) leaks to whoever can read that endpoint.
+export interface PublicServer {
+  id: string;
+  institution_code: string;
+  product_type: ProductType;
+  hostname: string;
+  status: ServerStatus;
+  bravo_version: string | null;
+  created_at: string;
+  approved_at: string | null;
+  last_seen_at: string | null;
+  last_heartbeat_at: string | null;
+}
+
+export function toPublicServer(server: ServerRow): PublicServer {
+  return {
+    id: server.id,
+    institution_code: server.institution_code,
+    product_type: server.product_type,
+    hostname: server.hostname,
+    status: server.status,
+    bravo_version: server.bravo_version,
+    created_at: server.created_at,
+    approved_at: server.approved_at,
+    last_seen_at: server.last_seen_at,
+    last_heartbeat_at: server.last_heartbeat_at,
+  };
+}
+
 export class OperationsRepository {
   constructor(private readonly db: Db) {}
 

@@ -1,4 +1,7 @@
-import { randomBytes, createHash, scryptSync, timingSafeEqual } from 'node:crypto';
+import { randomBytes, createHash, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
+import { promisify } from 'node:util';
+
+const scrypt = promisify(scryptCallback);
 
 // Prefixed so a leaked key is recognizable at a glance (e.g. in a log
 // line accidentally left in), the same way GitHub/Stripe tokens are.
@@ -30,13 +33,20 @@ const SCRYPT_KEYLEN = 64;
 // backend that otherwise depends on nothing beyond express/better-sqlite3/
 // zod. Format `scrypt:<saltHex>:<hashHex>` keeps the salt alongside the
 // hash (standard practice) without needing a second stored column.
-export function hashPassword(password: string): string {
+//
+// Async (node:crypto's callback `scrypt`, promisified) rather than
+// `scryptSync` on purpose: scrypt's whole cost is CPU-bound key
+// derivation, and the sync form blocks the single event loop for its
+// entire ~50-100ms for every login attempt — under any concurrent load
+// that stalls unrelated requests. The callback form runs on libuv's
+// threadpool instead.
+export async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(16);
-  const derived = scryptSync(password, salt, SCRYPT_KEYLEN);
+  const derived = (await scrypt(password, salt, SCRYPT_KEYLEN)) as Buffer;
   return `scrypt:${salt.toString('hex')}:${derived.toString('hex')}`;
 }
 
-export function verifyPassword(password: string, stored: string): boolean {
+export async function verifyPassword(password: string, stored: string): Promise<boolean> {
   const parts = stored.split(':');
   if (parts.length !== 3 || parts[0] !== 'scrypt') {
     return false;
@@ -46,8 +56,21 @@ export function verifyPassword(password: string, stored: string): boolean {
   if (salt.length === 0 || expected.length === 0) {
     return false;
   }
-  const derived = scryptSync(password, salt, expected.length);
+  const derived = (await scrypt(password, salt, expected.length)) as Buffer;
   return timingSafeEqual(derived, expected);
+}
+
+// Fixed dummy hash, computed once and memoized, so an unknown-username
+// login can still pay the same scrypt cost as a real lookup (see
+// routes/auth.ts) instead of short-circuiting straight to 401 — a
+// response-time gap between "no such user" and "wrong password" is
+// itself a username-enumeration oracle.
+let dummyPasswordHashPromise: Promise<string> | undefined;
+export function getDummyPasswordHash(): Promise<string> {
+  if (!dummyPasswordHashPromise) {
+    dummyPasswordHashPromise = hashPassword('timing-normalization-dummy-password');
+  }
+  return dummyPasswordHashPromise;
 }
 
 // Opaque session bearer token carried in an httpOnly cookie. Only its

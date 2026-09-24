@@ -1,9 +1,9 @@
 import { Router } from 'express';
 import type { AppConfig } from '../config.js';
-import { requireRole, requireSession } from '../auth.js';
+import { requireRole, requireSameOrigin, requireSession } from '../auth.js';
 import { generateApiKey, hashSecret } from '../crypto.js';
 import { groupLatestEventsByServer, isServerOnline, parseEventPayload } from '../serverStatus.js';
-import type { OperationsRepository } from '../repository.js';
+import { toPublicServer, type OperationsRepository } from '../repository.js';
 
 // Etap 3: local accounts + RBAC (see auth.ts) replace the interim v1
 // shared admin key. Viewer role gets read access; approve stays
@@ -23,7 +23,7 @@ export function createAdminRouter(repository: OperationsRepository, config: AppC
     const latestByServer = groupLatestEventsByServer(repository.listLatestEventPerCategoryForAllServers());
     const now = new Date();
     const enriched = servers.map((server) => ({
-      ...server,
+      ...toPublicServer(server),
       isOnline: isServerOnline(server, now, config.heartbeatExpectedIntervalMinutes, config.heartbeatMissedThreshold),
       latestByCategory: latestByServer.get(server.id) ?? {},
     }));
@@ -52,7 +52,7 @@ export function createAdminRouter(repository: OperationsRepository, config: AppC
     }
     res.status(200).json({
       server: {
-        ...server,
+        ...toPublicServer(server),
         isOnline: isServerOnline(server, new Date(), config.heartbeatExpectedIntervalMinutes, config.heartbeatMissedThreshold),
       },
       latestByCategory,
@@ -60,7 +60,7 @@ export function createAdminRouter(repository: OperationsRepository, config: AppC
     });
   });
 
-  router.post('/admin/servers/:serverId/approve', adminOnly, (req, res) => {
+  router.post('/admin/servers/:serverId/approve', adminOnly, requireSameOrigin(), (req, res) => {
     const server = repository.getServer(req.params.serverId);
     if (!server) {
       res.status(404).json({ error: 'not_found' });

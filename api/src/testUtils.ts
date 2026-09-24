@@ -7,16 +7,16 @@ import { openDb } from './db.js';
 import { OperationsRepository, type UserRow } from './repository.js';
 import type { UserRole } from './schemas.js';
 
-export function createTestUser(
+export async function createTestUser(
   repository: OperationsRepository,
   username: string,
   password: string,
   role: UserRole = 'admin',
-): UserRow {
+): Promise<UserRow> {
   return repository.createUser({
     id: randomUUID(),
     username,
-    passwordHash: hashPassword(password),
+    passwordHash: await hashPassword(password),
     role,
     now: new Date().toISOString(),
   });
