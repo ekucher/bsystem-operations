@@ -7,7 +7,7 @@ import type { Express } from 'express';
 const SERVER_ID = '22222222-2222-4222-8222-222222222222';
 
 async function enrollAndApprove(app: Express, repository: OperationsRepository): Promise<string> {
-  createTestUser(repository, 'admin', 'test-password', 'admin');
+  await createTestUser(repository, 'admin', 'test-password', 'admin');
   const admin = request.agent(app);
   await admin.post('/api/v1/auth/login').send({ username: 'admin', password: 'test-password' });
 
@@ -28,7 +28,7 @@ async function enrollAndApprove(app: Express, repository: OperationsRepository):
 // Detail-endpoint assertions below need an authenticated session too
 // (any role — GET /admin/servers/:id is read-only).
 async function loginAsViewer(app: Express, repository: OperationsRepository): Promise<request.SuperAgentTest> {
-  createTestUser(repository, 'viewer', 'test-password', 'viewer');
+  await createTestUser(repository, 'viewer', 'test-password', 'viewer');
   const agent = request.agent(app);
   await agent.post('/api/v1/auth/login').send({ username: 'viewer', password: 'test-password' });
   return agent;

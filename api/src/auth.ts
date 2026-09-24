@@ -27,7 +27,15 @@ export function parseCookies(header: string | undefined): Record<string, string>
     const key = part.slice(0, separatorIndex).trim();
     const value = part.slice(separatorIndex + 1).trim();
     if (key) {
-      out[key] = decodeURIComponent(value);
+      // A malformed percent-escape (e.g. a lone "%" or "%zz") makes
+      // decodeURIComponent throw — an attacker-controlled cookie header
+      // must not be able to turn a GET into an unhandled exception (500)
+      // instead of "unauthenticated". Fall back to the raw value.
+      try {
+        out[key] = decodeURIComponent(value);
+      } catch {
+        out[key] = value;
+      }
     }
   }
   return out;
@@ -82,6 +90,25 @@ export function requireBootstrapSecret(config: AppConfig) {
   };
 }
 
+const ONE_HOUR_MS = 60 * 60 * 1000;
+
+// Expired sessions are already treated as absent by getSessionByTokenHash
+// (see repository.ts), so this sweep is pure housekeeping — it keeps the
+// sessions table from growing unbounded, not a security control. Same
+// "run once at startup, then on an interval" convention as
+// retention.ts's scheduleRetentionCleanup.
+export function scheduleSessionCleanup(repository: OperationsRepository): NodeJS.Timeout {
+  const run = (): void => {
+    const deleted = repository.deleteExpiredSessions(new Date().toISOString());
+    if (deleted > 0) {
+      // eslint-disable-next-line no-console
+      console.log(`session cleanup: deleted ${deleted} expired session(s)`);
+    }
+  };
+  run();
+  return setInterval(run, ONE_HOUR_MS);
+}
+
 export function requireApiKey(repository: OperationsRepository) {
   return (req: Request, res: Response, next: NextFunction): void => {
     const apiKey = req.header('X-Api-Key');
@@ -95,6 +122,89 @@ export function requireApiKey(repository: OperationsRepository) {
       return;
     }
     req.operationsServer = server;
+    next();
+  };
+}
+
+// Bounded in-memory login-abuse guard, keyed on username+IP. No Redis:
+// one process, modest login volume — a Map that forgets everything on
+// restart is an acceptable tradeoff for the complexity it avoids. Each
+// router instance owns its own limiter (see routes/auth.ts) so tests
+// (and, if this process is ever clustered, each worker) don't share
+// state across unrelated logins.
+export class LoginAttemptLimiter {
+  private readonly attempts = new Map<string, { failures: number; blockedUntil: number }>();
+
+  constructor(
+    private readonly maxAttempts = 5,
+    private readonly baseWindowMs = 30_000,
+    private readonly clock: () => number = Date.now,
+  ) {}
+
+  private key(username: string, ip: string): string {
+    return `${username} ${ip}`;
+  }
+
+  // Returns the remaining block time in ms, or 0 if the caller may
+  // attempt a login right now.
+  msUntilAllowed(username: string, ip: string): number {
+    const record = this.attempts.get(this.key(username, ip));
+    if (!record) {
+      return 0;
+    }
+    const remaining = record.blockedUntil - this.clock();
+    return remaining > 0 ? remaining : 0;
+  }
+
+  // Exponential backoff past the threshold: the (threshold+1)th failure
+  // blocks for one window, the next for two windows, then four, capped
+  // so a persistent attacker can't wedge a username out indefinitely.
+  recordFailure(username: string, ip: string): void {
+    const key = this.key(username, ip);
+    const record = this.attempts.get(key) ?? { failures: 0, blockedUntil: 0 };
+    record.failures += 1;
+    if (record.failures > this.maxAttempts) {
+      const overBy = record.failures - this.maxAttempts - 1;
+      const backoffMs = Math.min(this.baseWindowMs * 2 ** overBy, this.baseWindowMs * 16);
+      record.blockedUntil = this.clock() + backoffMs;
+    }
+    this.attempts.set(key, record);
+  }
+
+  recordSuccess(username: string, ip: string): void {
+    this.attempts.delete(this.key(username, ip));
+  }
+}
+
+// CSRF posture (browser cookie-authed mutations only — API-key/bootstrap
+// flows never send a session cookie, so they're outside this check by
+// construction). Browsers attach an `Origin` header to every cross-site
+// AND same-site fetch/XHR that uses an "unsafe" method (POST etc.), so a
+// forged cross-site request riding the session cookie will present an
+// Origin that doesn't match this server's own Host — that's the case
+// this rejects. A request with no Origin header at all (plain curl,
+// server-to-server calls, older/non-fetch clients) is left alone rather
+// than blocked outright: the absence of Origin isn't itself evidence of
+// a cross-site browser request, only a present-and-wrong one is.
+export function requireSameOrigin() {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const origin = req.header('Origin');
+    if (!origin) {
+      next();
+      return;
+    }
+    const host = req.header('Host');
+    let originHost: string;
+    try {
+      originHost = new URL(origin).host;
+    } catch {
+      res.status(403).json({ error: 'invalid_origin' });
+      return;
+    }
+    if (!host || originHost !== host) {
+      res.status(403).json({ error: 'cross_origin_forbidden' });
+      return;
+    }
     next();
   };
 }
