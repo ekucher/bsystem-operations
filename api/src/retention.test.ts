@@ -19,6 +19,7 @@ describe('OperationsRepository.deleteEventsOlderThan', () => {
       institutionCode: '01234567',
       productType: 'LIMS',
       hostname: 'HOUSE-LIMS-02',
+      claim: 'test-claim',
       now: isoDaysAgo(100),
     });
 

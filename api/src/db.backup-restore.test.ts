@@ -36,6 +36,7 @@ describe('backupDatabase (WAL-safe restore round trip)', () => {
       institutionCode: '01234567',
       productType: 'LIMS',
       hostname: 'HOUSE-LIMS-01',
+      claim: 'test-claim',
       now: '2026-01-01T00:00:00.000Z',
     });
     repository.approveServer(SERVER_ID, 'plaintext-key', 'hashed-key', '2026-01-01T00:05:00.000Z');

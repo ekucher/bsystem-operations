@@ -38,11 +38,18 @@ components:
       in: header
       name: X-Enrollment-Claim
       description: >
-        Видається (і за потреби перевидається) у відповіді POST /enroll,
-        доки сервер ще pending. Прив'язує GET /enroll/{serverId} саме до
-        того enrollment-виклику, що його створив — володіння лише
-        bootstrapSecret більше не є достатнім для читання чужого ключа
-        за відомим/вгаданим GUID.
+        Wave 2 (A1/A2, виправлення P1 з рев'ю PR #2): claim генерує САМ
+        агент, що реєструється (випадковий непрозорий токен, напр. GUID),
+        і надсилає його вже в POST /enroll — сервер більше НІКОЛИ не
+        генерує й не перевидає claim сам. Раніше сервер ротував claim на
+        кожен POST /enroll і повертав НОВЕ значення виклику — цього було
+        достатньо, щоб знаючи лише bootstrapSecret (є в усього флоту) і
+        serverId жертви (видно через GET /admin/servers), забрати собі
+        валідний claim для чужого enrollment. Тепер: той самий claim, що
+        агент згенерував і надіслав у POST /enroll, використовується і в
+        GET /enroll/{serverId} — прив'язує обидва виклики саме до цього
+        enrollment без жодного сервер-side rotation, яким міг би
+        скористатись хтось інший.
 
   schemas:
     ProductType:
@@ -143,9 +150,25 @@ paths:
         Self-enrollment сервера (GUID). Bootstrap-секрет передається
         ТІЛЬКИ через заголовок X-Bootstrap-Secret (єдиний канонічний
         транспорт для обох /enroll-маршрутів — раніше POST приймав його
-        в тілі, а GET у заголовку; тепер узгоджено).
+        в тілі, а GET у заголовку; тепер узгоджено). Wave 2 (A1/A2):
+        X-Enrollment-Claim ТЕПЕР ТАКОЖ обов'язковий на цьому маршруті —
+        агент сам генерує claim (випадковий непрозорий токен) і надсилає
+        його тут; сервер лише зберігає hash(claim) і ніколи не генерує
+        /не перевидає його сам. Обидва заголовки потрібні РАЗОМ (AND, не
+        альтернатива).
       security:
         - bootstrapSecret: []
+          enrollmentClaim: []
+      parameters:
+        - name: X-Enrollment-Claim
+          in: header
+          required: true
+          schema:
+            type: string
+          description: >
+            Агент-згенерований опаковий токен для цього enrollment.
+            Обов'язковий, навіть для найпершого POST /enroll для нового
+            serverId.
       requestBody:
         required: true
         content:
@@ -166,19 +189,33 @@ paths:
       responses:
         '202':
           description: >
-            Прийнято. Поки сервер pending — ідемпотентно, повторний виклик
-            оновлює hostname/institutionCode і ПЕРЕВИДАЄ claimToken
-            (відповідь: { status, claimToken }). Після approve/revoke
-            ідентичність більше не мутується через цей маршрут — див. 409.
+            Прийнято (відповідь: { status }). Поки сервер pending —
+            ідемпотентно: повторний виклик з ТИМ САМИМ X-Enrollment-Claim
+            (той, що агент вже згенерував і зберіг локально — це і є
+            recovery-шлях після втраченої відповіді, A7) оновлює
+            hostname/institutionCode без жодної мутації claim (нічого
+            перевидавати — сервер його ніколи не генерував). Claim більше
+            НЕ повертається в тілі відповіді — агент вже ним володіє.
+            Після approve/revoke ідентичність більше не мутується через
+            цей маршрут — див. 409.
         '400':
-          description: Невалідний запит
+          description: >
+            Невалідний запит — malformed body АБО відсутній
+            X-Enrollment-Claim заголовок.
         '401':
           description: Невірний bootstrap-секрет (передано не в тому заголовку, або взагалі не передано)
         '409':
           description: >
-            Сервер вже approved або revoked — повторний POST /enroll для
-            цього id більше не скидає й не переписує його ідентичність;
-            потрібна дія адміністратора (revoke/reissue).
+            Або `{ error: 'already_finalized', status }` — сервер вже
+            approved/revoked, повторний POST /enroll для цього id більше
+            не скидає й не переписує його ідентичність незалежно від
+            наданого claim; потрібна дія адміністратора (revoke/reissue).
+            Або `{ error: 'claim_mismatch' }` — сервер усе ще pending, але
+            наданий X-Enrollment-Claim НЕ збігається з тим, що вже
+            збережено для цього serverId (Wave 2/A3: це і є захист від
+            takeover — без цієї перевірки хтось, хто знає лише
+            bootstrap-секрет і serverId жертви, міг би видати себе за
+            оригінального агента).
         '503':
           description: Enrollment не сконфігуровано (OPERATIONS_BOOTSTRAP_SECRET відсутній)
 
@@ -193,7 +230,7 @@ paths:
         POST /enroll).
       security:
         - bootstrapSecret: []
-        - enrollmentClaim: []
+          enrollmentClaim: []
       parameters:
         - name: serverId
           in: path
@@ -213,10 +250,14 @@ paths:
           description: Невірний bootstrap-секрет
         '404':
           description: >
-            Сервер не знайдений, АБО revoked, АБО claim відсутній/невірний —
-            навмисно одна й та сама відповідь для всіх трьох випадків,
-            щоб володіння лише bootstrap-секретом не давало змоги
-            відрізнити "не існує" від "чужий/відкликаний enrollment".
+            Сервер не знайдений, АБО revoked, АБО claim відсутній/невірний
+            (включно з claim, що є валідним для ІНШОГО serverId — A6) —
+            навмисно одна й та сама відповідь для всіх цих випадків, щоб
+            володіння лише bootstrap-секретом (і, окремо, валідним чужим
+            claim) не давало змоги відрізнити "не існує" від
+            "чужий/відкликаний enrollment".
+        '503':
+          description: Enrollment не сконфігуровано (OPERATIONS_BOOTSTRAP_SECRET відсутній)
 
   /admin/servers:
     get:
