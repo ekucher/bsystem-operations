@@ -181,6 +181,35 @@ export class OperationsRepository {
     return this.getServer(id);
   }
 
+  // Wave-2 C3: approveServer + its audit row, atomically. Previously
+  // routes/admin.ts called repository.approveServer(...) and then
+  // repository.recordAdminAction(...) as two independent statements — if
+  // the second one failed (constraint violation, disk full, etc.) after
+  // the first already committed, the server would end up 'approved' with
+  // no audit trail at all, a silent gap in exactly the accountability
+  // this hardening effort is meant to guarantee. Wrapping both in one
+  // db.transaction() (same pattern migrations.ts already uses) means
+  // either both persist or neither does.
+  approveServerWithAudit(input: {
+    id: string;
+    apiKey: string;
+    apiKeyHash: string;
+    adminUserId: string;
+    now: string;
+  }): ServerRow | undefined {
+    const run = this.db.transaction(() => {
+      const server = this.approveServer(input.id, input.apiKey, input.apiKeyHash, input.now);
+      this.recordAdminAction({
+        action: 'approve',
+        serverId: input.id,
+        adminUserId: input.adminUserId,
+        now: input.now,
+      });
+      return server;
+    });
+    return run();
+  }
+
   // D3: TTL-bounded, re-revealable-by-the-same-claim reveal (replaces
   // the old reveal-once semantics). Deliberately does NOT null the key
   // on a successful read — that was Finding 4/the original lost-response
@@ -243,6 +272,31 @@ export class OperationsRepository {
     return { changed: result.changes > 0, server: this.getServer(id) };
   }
 
+  // Wave-2 C3: revokeServer + its audit row, atomically. See
+  // approveServerWithAudit's comment for why this must be one
+  // transaction rather than two independent statements.
+  revokeServerWithAudit(input: {
+    id: string;
+    adminUserId: string;
+    reason?: string;
+    now: string;
+  }): { changed: boolean; server: ServerRow | undefined } {
+    const run = this.db.transaction(() => {
+      const result = this.revokeServer(input.id, input.now);
+      if (result.changed) {
+        this.recordAdminAction({
+          action: 'revoke',
+          serverId: input.id,
+          adminUserId: input.adminUserId,
+          reason: input.reason,
+          now: input.now,
+        });
+      }
+      return result;
+    });
+    return run();
+  }
+
   // D4: admin-initiated reissue — rotates the API key for an 'approved'
   // server (compromised/lost key) or performs a controlled un-revoke of
   // a 'revoked' one (never automatic; only reachable through this
@@ -261,6 +315,33 @@ export class OperationsRepository {
       )
       .run(apiKeyHash, now, id);
     return { changed: result.changes > 0, server: this.getServer(id) };
+  }
+
+  // Wave-2 C3: reissueApiKey + its audit row, atomically. See
+  // approveServerWithAudit's comment for why this must be one
+  // transaction rather than two independent statements.
+  reissueApiKeyWithAudit(input: {
+    id: string;
+    apiKey: string;
+    apiKeyHash: string;
+    adminUserId: string;
+    reason?: string;
+    now: string;
+  }): { changed: boolean; server: ServerRow | undefined } {
+    const run = this.db.transaction(() => {
+      const result = this.reissueApiKey(input.id, input.apiKey, input.apiKeyHash, input.now);
+      if (result.changed) {
+        this.recordAdminAction({
+          action: 'reissue',
+          serverId: input.id,
+          adminUserId: input.adminUserId,
+          reason: input.reason,
+          now: input.now,
+        });
+      }
+      return result;
+    });
+    return run();
   }
 
   // ===== D4: admin action audit trail =====
