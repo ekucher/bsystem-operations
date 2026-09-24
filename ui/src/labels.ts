@@ -61,6 +61,8 @@ export function onlineLabel(isOnline: boolean): string {
   return isOnline ? 'онлайн' : 'офлайн';
 }
 
+export const NEVER_HEARTBEAT_LABEL = 'ще не було сигналу';
+
 // Component-теги, які реальні агенти (BRAVO.Archive/Maintenance/Health)
 // зараз надсилають у payload.component — довільний рядок з боку агента,
 // тому невідомі значення показуємо як є, а не приховуємо.

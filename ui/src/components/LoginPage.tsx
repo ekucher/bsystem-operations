@@ -10,9 +10,10 @@ interface LoginPageProps {
   onLoggedIn: (user: AuthUser) => void;
   theme: Theme;
   onToggleTheme: () => void;
+  notice?: string | null;
 }
 
-export default function LoginPage({ onLoggedIn, theme, onToggleTheme }: LoginPageProps) {
+export default function LoginPage({ onLoggedIn, theme, onToggleTheme, notice }: LoginPageProps) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -43,6 +44,11 @@ export default function LoginPage({ onLoggedIn, theme, onToggleTheme }: LoginPag
         </div>
         <h1>BSYSTEM Operations</h1>
         <p className="sub">Моніторинг серверів LIMS / VetOffice</p>
+        {notice && (
+          <p role="status" className="form-notice">
+            {notice}
+          </p>
+        )}
         <div className="field">
           <label htmlFor="username">Логін</label>
           <input
