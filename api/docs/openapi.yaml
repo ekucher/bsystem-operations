@@ -90,6 +90,11 @@ paths:
   /auth/login:
     post:
       summary: Вхід локальним обліковим записом (Etap 3). Немає self-registration — акаунти лише через CLI create-admin.
+      # Explicit "no auth required" (this IS the auth endpoint) — an
+      # empty array, not an omitted `security` key, so spec-linters (see
+      # F8's redocly lint CI step) can tell "intentionally public" apart
+      # from "someone forgot to document the auth requirement".
+      security: []
       requestBody:
         required: true
         content:
