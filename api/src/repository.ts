@@ -354,6 +354,31 @@ export class OperationsRepository {
   // the SQL portable across whatever sqlite3 version better-sqlite3
   // bundles, and the events table stays small enough (90-day retention)
   // for this to be cheap.
+  //
+  // D1/D2 (Wave 2 hardening): ordered by COALESCE(occurred_at, created_at)
+  // DESC, not created_at DESC alone. Once a durable agent-side outbox can
+  // deliver events late/out of order after an outage, "received last"
+  // (created_at) is no longer the same thing as "happened last"
+  // (occurred_at) — an old ERROR delivered late after a network partition
+  // must not clobber a newer SUCCESS that already arrived. created_at
+  // DESC, id DESC remains as the explicit tie-breaker for events that
+  // share an occurred_at (or lack one entirely and fall back to
+  // created_at for both the primary and tie-break key — a harmless
+  // no-op comparison in that case).
+  //
+  // Index decision: deliberately NOT adding a new index for this COALESCE
+  // ordering. idx_events_server_category_created (server_id, category,
+  // created_at DESC, id DESC), added in Wave 1, cannot satisfy an
+  // expression-based ORDER BY, so this subquery now does a small in-memory
+  // sort per (server_id, category) group instead of a pure index range
+  // seek. At this project's actual scale — dozens of servers, a handful
+  // of categories each, 90-day retention keeping the events table small,
+  // and this query running on dashboard polls rather than a hot request
+  // path — that sort is cheap enough that a SQLite expression index (which
+  // would need to duplicate occurred_at/created_at into an indexed
+  // computed column, a bigger schema change than this hardening pass
+  // warrants) is not justified. Revisit if event volume or poll frequency
+  // grow by an order of magnitude.
   listLatestEventPerCategoryForAllServers(): EventRow[] {
     return this.db
       .prepare(
@@ -361,7 +386,7 @@ export class OperationsRepository {
          WHERE e.id = (
            SELECT e2.id FROM events e2
            WHERE e2.server_id = e.server_id AND e2.category = e.category
-           ORDER BY e2.created_at DESC, e2.id DESC
+           ORDER BY COALESCE(e2.occurred_at, e2.created_at) DESC, e2.created_at DESC, e2.id DESC
            LIMIT 1
          )`,
       )
@@ -375,7 +400,7 @@ export class OperationsRepository {
          WHERE e.server_id = ? AND e.id = (
            SELECT e2.id FROM events e2
            WHERE e2.server_id = e.server_id AND e2.category = e.category
-           ORDER BY e2.created_at DESC, e2.id DESC
+           ORDER BY COALESCE(e2.occurred_at, e2.created_at) DESC, e2.created_at DESC, e2.id DESC
            LIMIT 1
          )`,
       )
