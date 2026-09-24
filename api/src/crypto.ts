@@ -96,11 +96,18 @@ export async function verifyPassword(password: string, stored: string): Promise<
 // routes/auth.ts) instead of short-circuiting straight to 401 — a
 // response-time gap between "no such user" and "wrong password" is
 // itself a username-enumeration oracle.
-let dummyPasswordHashPromise: Promise<string> | undefined;
+//
+// Kicked off eagerly at module load (not lazily on first call): a lazy
+// `if (!promise) promise = hashPassword(...)` pays the full scrypt cost
+// TWICE on the very first request after a process start (once to derive
+// the dummy hash, once to compare against it) while every later request
+// only pays it once — a measurable timing anomaly that specifically
+// singles out "first login attempt after restart", exactly what an
+// account-enumeration attacker watching for a fresh deploy would look
+// for. Starting the derivation here means it's already settled (or
+// settling) long before the first request can reach it.
+const dummyPasswordHashPromise: Promise<string> = hashPassword('timing-normalization-dummy-password');
 export function getDummyPasswordHash(): Promise<string> {
-  if (!dummyPasswordHashPromise) {
-    dummyPasswordHashPromise = hashPassword('timing-normalization-dummy-password');
-  }
   return dummyPasswordHashPromise;
 }
 

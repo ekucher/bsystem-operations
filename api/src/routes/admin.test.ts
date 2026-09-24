@@ -246,6 +246,67 @@ describe('CSRF Origin check on mutating admin routes', () => {
     const res = await admin.post(`/api/v1/admin/servers/${serverId}/approve`);
     expect(res.status).toBe(200);
   });
+
+  // B1/B2 regression: this is exactly the real deployment shape — the UI
+  // is reached on a non-default port (e.g. 8082, see docker-compose.yml's
+  // `ui` port mapping), so the browser's Origin always carries that port
+  // (`http://localhost:8082`). Before the ui/nginx.conf fix (`$host` ->
+  // `$http_host`), nginx forwarded a Host header with the port STRIPPED,
+  // so this exact same-origin browser request would have failed
+  // requireSameOrigin's Host/Origin comparison and been rejected with
+  // cross_origin_forbidden — a false positive against a legitimate
+  // same-origin admin action. Simulated here by setting Host explicitly,
+  // since supertest talks to the app directly rather than through nginx
+  // (see the real-nginx docker compose verification in the task report
+  // for the end-to-end version of this same check).
+  it('allows approve when Host and Origin both carry the same non-default port (real proxied deployment shape)', async () => {
+    const { app, repository } = buildTestApp();
+    const admin = await loginAsAdmin(app, repository);
+    const serverId = '20202020-2020-4202-8202-202020202020';
+    await request(app)
+      .post('/api/v1/enroll')
+      .set('X-Bootstrap-Secret', 'test-bootstrap-secret')
+      .send({
+        serverId,
+        institutionCode: '01234567',
+        productType: 'LIMS',
+        hostname: 'HOST-port-match',
+      });
+
+    const res = await admin
+      .post(`/api/v1/admin/servers/${serverId}/approve`)
+      .set('Host', 'localhost:8082')
+      .set('Origin', 'http://localhost:8082');
+    expect(res.status).toBe(200);
+  });
+
+  // Same scenario, but the Origin is a genuinely different (attacker)
+  // origin than the Host the request claims to be for — must still 403
+  // even though both carry a matching, non-default-looking port shape.
+  // If existing tests only ever exercised the bare-hostname-no-port
+  // case, a regression that started comparing ports incorrectly (e.g.
+  // stripping them on both sides, or ignoring them entirely) could pass
+  // the test above while silently reopening this hole.
+  it('still rejects a mismatched Origin when Host carries a non-default port', async () => {
+    const { app, repository } = buildTestApp();
+    const admin = await loginAsAdmin(app, repository);
+    const serverId = '30303030-3030-4303-8303-303030303030';
+    await request(app)
+      .post('/api/v1/enroll')
+      .set('X-Bootstrap-Secret', 'test-bootstrap-secret')
+      .send({
+        serverId,
+        institutionCode: '01234567',
+        productType: 'LIMS',
+        hostname: 'HOST-port-mismatch',
+      });
+
+    const res = await admin
+      .post(`/api/v1/admin/servers/${serverId}/approve`)
+      .set('Host', 'localhost:8082')
+      .set('Origin', 'http://evil.example');
+    expect(res.status).toBe(403);
+  });
 });
 
 // D4: credential lifecycle — revoke / reissue, and their audit trail.

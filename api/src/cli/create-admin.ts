@@ -36,6 +36,10 @@ function parseArgs(argv: string[]): ParsedArgs {
   return out;
 }
 
+const CTRL_C = '\x03';
+const CTRL_D = '\x04';
+const BACKSPACE = '\x7f';
+
 // Reads a password from stdin with echo disabled, so it never appears on
 // the terminal, in shell history, or in scrollback. Requires an
 // interactive TTY (raw mode) — a piped/non-interactive stdin has no
@@ -57,26 +61,37 @@ function promptHiddenPassword(promptText: string): Promise<string> {
       stdin.pause();
       stdin.removeListener('data', onData);
     };
+    // A terminal delivers a PASTED password as a single `data` event
+    // containing every character of the paste at once, not one event per
+    // keystroke — a handler that treats `chunk` as exactly one character
+    // (the original bug here: a `switch (chunk)` that only matched
+    // whole-string special values) silently mishandles a pasted password:
+    // an embedded Enter/backspace/Ctrl-C/Ctrl-D anywhere but the very last
+    // position was missed entirely, and the paste got appended to `input`
+    // verbatim, newline and all. Iterate character by character so every
+    // control character is recognized wherever it falls within the chunk.
     const onData = (chunk: string): void => {
-      switch (chunk) {
-        case '\n':
-        case '\r':
-        case '': // Ctrl-D
-          cleanup();
-          process.stdout.write('\n');
-          resolve(input);
-          return;
-        case '': // Ctrl-C
-          cleanup();
-          process.stdout.write('\n');
-          reject(new Error('aborted'));
-          return;
-        case '': // backspace
-        case '\b':
-          input = input.slice(0, -1);
-          return;
-        default:
-          input += chunk;
+      for (const ch of chunk) {
+        switch (ch) {
+          case '\n':
+          case '\r':
+          case CTRL_D:
+            cleanup();
+            process.stdout.write('\n');
+            resolve(input);
+            return;
+          case CTRL_C:
+            cleanup();
+            process.stdout.write('\n');
+            reject(new Error('aborted'));
+            return;
+          case BACKSPACE:
+          case '\b':
+            input = input.slice(0, -1);
+            break;
+          default:
+            input += ch;
+        }
       }
     };
     stdin.on('data', onData);
