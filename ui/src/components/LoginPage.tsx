@@ -1,13 +1,18 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { ApiError, login } from '../api';
+import { IconLock, IconRack } from '../icons';
 import type { AuthUser } from '../types';
+import ThemeToggle from './ThemeToggle';
+import type { Theme } from '../useTheme';
 
 interface LoginPageProps {
   onLoggedIn: (user: AuthUser) => void;
+  theme: Theme;
+  onToggleTheme: () => void;
 }
 
-export default function LoginPage({ onLoggedIn }: LoginPageProps) {
+export default function LoginPage({ onLoggedIn, theme, onToggleTheme }: LoginPageProps) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -31,29 +36,39 @@ export default function LoginPage({ onLoggedIn }: LoginPageProps) {
 
   return (
     <main className="login-page">
-      <form className="login-form" onSubmit={handleSubmit}>
+      <ThemeToggle theme={theme} onToggle={onToggleTheme} className="login-theme-toggle" />
+      <form className="login-card" onSubmit={handleSubmit}>
+        <div className="login-mark">
+          <IconRack />
+        </div>
         <h1>BSYSTEM Operations</h1>
-        <label htmlFor="username">Логін</label>
-        <input
-          id="username"
-          name="username"
-          type="text"
-          autoComplete="username"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          required
-        />
-        <label htmlFor="password">Пароль</label>
-        <input
-          id="password"
-          name="password"
-          type="password"
-          autoComplete="current-password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-        />
-        <button type="submit" disabled={submitting}>
+        <p className="sub">Моніторинг серверів LIMS / VetOffice</p>
+        <div className="field">
+          <label htmlFor="username">Логін</label>
+          <input
+            id="username"
+            name="username"
+            type="text"
+            autoComplete="username"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            required
+          />
+        </div>
+        <div className="field">
+          <label htmlFor="password">Пароль</label>
+          <input
+            id="password"
+            name="password"
+            type="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+          />
+        </div>
+        <button type="submit" className="btn btn-primary full" disabled={submitting}>
+          <IconLock />
           {submitting ? 'Вхід...' : 'Увійти'}
         </button>
         {error && (
@@ -61,6 +76,7 @@ export default function LoginPage({ onLoggedIn }: LoginPageProps) {
             {error}
           </p>
         )}
+        <p className="login-foot">Доступ лише для уповноважених операторів</p>
       </form>
     </main>
   );
