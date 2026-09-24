@@ -11,17 +11,21 @@ async function enrollAndApprove(app: Express, repository: OperationsRepository):
   const admin = request.agent(app);
   await admin.post('/api/v1/auth/login').send({ username: 'admin', password: 'test-password' });
 
-  await request(app).post('/api/v1/enroll').send({
-    serverId: SERVER_ID,
-    institutionCode: '01234567',
-    productType: 'VETOFFICE',
-    hostname: 'HOUSE-VET-01',
-    bootstrapSecret: 'test-bootstrap-secret',
-  });
+  const enrollRes = await request(app)
+    .post('/api/v1/enroll')
+    .set('X-Bootstrap-Secret', 'test-bootstrap-secret')
+    .send({
+      serverId: SERVER_ID,
+      institutionCode: '01234567',
+      productType: 'VETOFFICE',
+      hostname: 'HOUSE-VET-01',
+    });
+  const claimToken = enrollRes.body.claimToken as string;
   await admin.post(`/api/v1/admin/servers/${SERVER_ID}/approve`);
   const poll = await request(app)
     .get(`/api/v1/enroll/${SERVER_ID}`)
-    .set('X-Bootstrap-Secret', 'test-bootstrap-secret');
+    .set('X-Bootstrap-Secret', 'test-bootstrap-secret')
+    .set('X-Enrollment-Claim', claimToken);
   return poll.body.apiKey as string;
 }
 
