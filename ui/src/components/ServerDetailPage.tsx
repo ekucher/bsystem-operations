@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError, getServer } from '../api';
 import type { EventPayload, EventStage, ServerDetail } from '../types';
-import { CATEGORY_LABELS } from './OverviewPage';
+import { CATEGORY_LABELS, categoryLabel, componentLabel, onlineLabel, serverStatusLabel, severityLabel, stageStatusLabel } from '../labels';
 
 interface ServerDetailPageProps {
   serverId: string;
@@ -92,9 +92,9 @@ export default function ServerDetailPage({ serverId, onBack }: ServerDetailPageP
         {server.hostname} <span className="muted">({server.institution_code})</span>
       </h2>
       <p>
-        Продукт: <strong>{server.product_type}</strong> · Статус: <strong>{server.status}</strong> ·{' '}
+        Продукт: <strong>{server.product_type}</strong> · Статус: <strong>{serverStatusLabel(server.status)}</strong> ·{' '}
         <span className={server.isOnline ? 'badge badge-online' : 'badge badge-offline'}>
-          {server.isOnline ? 'online' : 'offline'}
+          {onlineLabel(server.isOnline)}
         </span>
       </p>
       <p className="muted">
@@ -110,7 +110,7 @@ export default function ServerDetailPage({ serverId, onBack }: ServerDetailPageP
               <div className="category-status-title">{CATEGORY_LABELS[category]}</div>
               {entry ? (
                 <>
-                  <span className={`badge badge-${entry.severity.toLowerCase()}`}>{entry.severity}</span>
+                  <span className={`badge badge-${entry.severity.toLowerCase()}`}>{severityLabel(entry.severity)}</span>
                   <p>{entry.payload.message}</p>
                   <p className="muted">{formatTimestamp(entry.createdAt)}</p>
                 </>
@@ -147,9 +147,9 @@ export default function ServerDetailPage({ serverId, onBack }: ServerDetailPageP
           const hasExpandable = Boolean(stages?.length) || Boolean(otherDetails && Object.keys(otherDetails).length > 0);
           return (
             <li key={event.id}>
-              <span className={`badge badge-${event.severity.toLowerCase()}`}>{event.severity}</span>{' '}
-              <span className="muted">{formatTimestamp(event.created_at)}</span> — {event.category}
-              {payload.component ? <span className="muted"> [{payload.component}]</span> : null}: {payload.message}
+              <span className={`badge badge-${event.severity.toLowerCase()}`}>{severityLabel(event.severity)}</span>{' '}
+              <span className="muted">{formatTimestamp(event.created_at)}</span> — {categoryLabel(event.category)}
+              {payload.component ? <span className="muted"> [{componentLabel(payload.component)}]</span> : null}: {payload.message}
               {hasExpandable && (
                 <details className="event-details">
                   <summary>деталі{stages?.length ? ` (${stages.length} етапів)` : ''}</summary>
@@ -157,7 +157,7 @@ export default function ServerDetailPage({ serverId, onBack }: ServerDetailPageP
                     <ul className="event-stage-list">
                       {stages.map((stage, index) => (
                         <li key={index}>
-                          <span className={`badge badge-stage-${stage.status.toLowerCase()}`}>{stage.status}</span>{' '}
+                          <span className={`badge badge-stage-${stage.status.toLowerCase()}`}>{stageStatusLabel(stage.status)}</span>{' '}
                           {stage.name}
                           {typeof stage.durationMs === 'number' ? ` — ${(stage.durationMs / 1000).toFixed(1)}с` : ''}
                           {stage.details ? ` (${stage.details})` : ''}

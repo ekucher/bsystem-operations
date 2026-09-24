@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ApiError, approveServer, listServers } from '../api';
 import type { AuthUser, ServerSummary } from '../types';
+import { CATEGORY_LABELS, onlineLabel, serverStatusLabel, severityLabel } from '../labels';
 
 interface OverviewPageProps {
   user: AuthUser;
@@ -11,12 +12,6 @@ type SortKey = 'hostname' | 'institution_code' | 'product_type' | 'status' | 'la
 type StatusFilter = 'all' | 'pending' | 'approved' | 'revoked';
 
 const POLL_INTERVAL_MS = 30_000;
-
-const CATEGORY_LABELS: Record<string, string> = {
-  backup: 'Backup',
-  maintenance: 'Maintenance',
-  health: 'Health',
-};
 
 function severityBadge(severity: string | undefined): string {
   if (!severity) {
@@ -106,11 +101,11 @@ export default function OverviewPage({ user, onOpenServer }: OverviewPageProps) 
         </div>
         <div className="counter counter-ok">
           <span className="counter-value">{counters.online}</span>
-          <span className="counter-label">online</span>
+          <span className="counter-label">онлайн</span>
         </div>
         <div className="counter counter-warn">
           <span className="counter-value">{counters.offline}</span>
-          <span className="counter-label">offline</span>
+          <span className="counter-label">офлайн</span>
         </div>
         <div className="counter">
           <span className="counter-value">{counters.pending}</span>
@@ -118,7 +113,7 @@ export default function OverviewPage({ user, onOpenServer }: OverviewPageProps) 
         </div>
         <div className="counter counter-critical">
           <span className="counter-value">{counters.critical}</span>
-          <span className="counter-label">critical</span>
+          <span className="counter-label">критичні</span>
         </div>
       </div>
 
@@ -163,9 +158,9 @@ export default function OverviewPage({ user, onOpenServer }: OverviewPageProps) 
             <th>Хост / установа</th>
             <th>Продукт</th>
             <th>Статус</th>
-            <th>Backup</th>
-            <th>Maintenance</th>
-            <th>Health</th>
+            <th>{CATEGORY_LABELS.backup}</th>
+            <th>{CATEGORY_LABELS.maintenance}</th>
+            <th>{CATEGORY_LABELS.health}</th>
             <th>Останній контакт</th>
             <th />
           </tr>
@@ -181,17 +176,17 @@ export default function OverviewPage({ user, onOpenServer }: OverviewPageProps) 
               </td>
               <td>{server.product_type}</td>
               <td>
-                <span className={`badge badge-status-${server.status}`}>{server.status}</span>
+                <span className={`badge badge-status-${server.status}`}>{serverStatusLabel(server.status)}</span>
                 {server.status === 'approved' && (
                   <span className={server.isOnline ? 'badge badge-online' : 'badge badge-offline'}>
-                    {server.isOnline ? 'online' : 'offline'}
+                    {onlineLabel(server.isOnline)}
                   </span>
                 )}
               </td>
               {(['backup', 'maintenance', 'health'] as const).map((category) => (
                 <td key={category}>
                   <span className={severityBadge(server.latestByCategory[category]?.severity)}>
-                    {server.latestByCategory[category]?.severity ?? '—'}
+                    {severityLabel(server.latestByCategory[category]?.severity)}
                   </span>
                 </td>
               ))}
@@ -199,7 +194,7 @@ export default function OverviewPage({ user, onOpenServer }: OverviewPageProps) 
               <td>
                 {server.status === 'pending' && user.role === 'admin' && (
                   <button type="button" disabled={approvingId === server.id} onClick={() => handleApprove(server.id)}>
-                    {approvingId === server.id ? 'Підтвердження...' : 'Approve'}
+                    {approvingId === server.id ? 'Підтвердження...' : 'Підтвердити'}
                   </button>
                 )}
               </td>
@@ -216,5 +211,3 @@ export default function OverviewPage({ user, onOpenServer }: OverviewPageProps) 
     </section>
   );
 }
-
-export { CATEGORY_LABELS };
