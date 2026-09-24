@@ -76,3 +76,37 @@ export const LoginRequest = z.object({
   password: z.string().min(1),
 });
 export type LoginRequest = z.infer<typeof LoginRequest>;
+
+// Minimum password policy for local accounts (create-admin CLI — see
+// src/cli/create-admin.ts, the only place a password is ever set). Not
+// applied to login: an existing weak password from before this policy
+// existed must still be allowed to authenticate, only new/changed
+// passwords are gated. Deliberately no composition rules (forced
+// uppercase/digit/special-char) — length plus a denylist of the
+// passwords attackers try first buys most of the real protection
+// without the usability cost.
+const COMMON_WEAK_PASSWORDS = new Set([
+  'password',
+  'password1',
+  'password123',
+  'password1234',
+  '123456789',
+  '1234567890',
+  '12345678910',
+  'qwertyuiop',
+  'qwertyuiop12',
+  'qwertyuiop123',
+  'letmein12345',
+  'admin123456',
+  'administrator',
+  'changeme123',
+  'welcome12345',
+]);
+
+export const NewPassword = z
+  .string()
+  .min(12, 'Password must be at least 12 characters long.')
+  .refine((value) => !COMMON_WEAK_PASSWORDS.has(value.toLowerCase()), {
+    message: 'Password is too common/predictable — choose a less guessable one.',
+  });
+export type NewPassword = z.infer<typeof NewPassword>;
