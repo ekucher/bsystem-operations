@@ -55,6 +55,8 @@ export interface EventRow {
   severity: Severity;
   payload: string;
   created_at: string;
+  event_id: string | null;
+  occurred_at: string | null;
 }
 
 export interface UserRow {
@@ -298,19 +300,37 @@ export class OperationsRepository {
       .run(now, now, bravoVersion ?? null, id);
   }
 
+  // E5: idempotent when `eventId` is supplied — a retried POST for the
+  // same (serverId, eventId) hits the partial unique index added in
+  // migration 7 and is silently ignored (ON CONFLICT ... DO NOTHING)
+  // rather than duplicated; the caller (routes/events.ts) still returns
+  // 202 either way; it has no way to distinguish "inserted" from
+  // "already had this one" and doesn't need to. `occurredAt` is optional
+  // (E7) — older agents/events without it leave the column NULL.
   insertEvent(input: {
     serverId: string;
     category: EventCategory | 'heartbeat';
     severity: Severity;
     payload: EventPayload | Record<string, never>;
     now: string;
+    eventId?: string;
+    occurredAt?: string;
   }): void {
     this.db
       .prepare(
-        `INSERT INTO events (server_id, category, severity, payload, created_at)
-         VALUES (?, ?, ?, ?, ?)`,
+        `INSERT INTO events (server_id, category, severity, payload, created_at, event_id, occurred_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (server_id, event_id) WHERE event_id IS NOT NULL DO NOTHING`,
       )
-      .run(input.serverId, input.category, input.severity, JSON.stringify(input.payload), input.now);
+      .run(
+        input.serverId,
+        input.category,
+        input.severity,
+        JSON.stringify(input.payload),
+        input.now,
+        input.eventId ?? null,
+        input.occurredAt ?? null,
+      );
   }
 
   listRecentEvents(serverId: string, limit: number): EventRow[] {

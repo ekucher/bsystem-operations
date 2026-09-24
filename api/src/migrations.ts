@@ -162,6 +162,32 @@ export const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 7,
+    description: 'Event envelope (eventId/occurredAt) + idempotent ingestion (E4/E5/E7)',
+    up: (db) => {
+      // event_id/occurred_at are nullable: older agents (pre-outbox) send
+      // neither, and existing rows have neither — idempotency and
+      // occurred-vs-received distinction are best-effort improvements
+      // for agents that supply them, not a breaking requirement for
+      // agents that don't (yet).
+      const columns = db.pragma('table_info(events)') as Array<{ name: string }>;
+      const names = new Set(columns.map((c) => c.name));
+      if (!names.has('event_id')) {
+        db.exec('ALTER TABLE events ADD COLUMN event_id TEXT;');
+      }
+      if (!names.has('occurred_at')) {
+        db.exec('ALTER TABLE events ADD COLUMN occurred_at TEXT;');
+      }
+      // Partial unique index (event_id IS NOT NULL only) — enforces
+      // idempotent ingestion (UNIQUE(server_id, event_id)) for agents
+      // that supply an eventId, without constraining rows that don't.
+      db.exec(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_events_server_eventid_unique
+        ON events (server_id, event_id) WHERE event_id IS NOT NULL;
+      `);
+    },
+  },
 ];
 
 // Runs every migration whose version is greater than the DB's current

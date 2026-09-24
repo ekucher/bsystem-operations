@@ -378,9 +378,32 @@ paths:
                   $ref: '#/components/schemas/Severity'
                 payload:
                   $ref: '#/components/schemas/EventPayload'
+                eventId:
+                  type: string
+                  maxLength: 200
+                  description: >
+                    Опціональний (E4/E5) — стабільний ідентифікатор події
+                    від агента (напр. з локального durable outbox).
+                    Разом із серверним serverId гарантує ідемпотентний
+                    прийом: повторний POST з тим самим eventId (напр. після
+                    retry, коли перша відповідь загубилась) не створює
+                    дубль у БД, а повертає той самий 202.
+                occurredAt:
+                  type: string
+                  format: date-time
+                  description: >
+                    Опціональний (E7) — момент фактичної події на
+                    стороні агента, окремо від моменту отримання API
+                    (created_at). Важливо для подій, що були надіслані
+                    із затримкою через локальний outbox під час
+                    недоступності Operations.
+                schemaVersion:
+                  type: integer
+                  minimum: 1
+                  description: Опціональна версія конверта події зі сторони агента.
       responses:
         '202':
-          description: Прийнято
+          description: Прийнято (ідемпотентно за eventId, якщо передано)
         '400':
           description: Невалідний payload
         '401':

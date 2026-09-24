@@ -55,10 +55,21 @@ export const EnrollRequest = z.object({
 });
 export type EnrollRequest = z.infer<typeof EnrollRequest>;
 
+// eventId/occurredAt/schemaVersion (E4/E5/E7): optional so pre-outbox
+// agents (no local envelope yet) keep working unchanged. When an agent
+// does supply eventId, the API guarantees UNIQUE(server_id, event_id) —
+// a retried POST for the same event is accepted idempotently, not
+// duplicated (see repository.insertEvent). occurredAt lets the dashboard
+// eventually distinguish "when it actually happened" from
+// "when the API received it" (createdAt) for an event delayed by a
+// durable local outbox during an outage.
 export const EventRequest = z.object({
   category: EventCategory,
   severity: Severity,
   payload: EventPayload,
+  eventId: z.string().min(1).max(200).optional(),
+  occurredAt: z.string().datetime().optional(),
+  schemaVersion: z.number().int().positive().optional(),
 });
 export type EventRequest = z.infer<typeof EventRequest>;
 

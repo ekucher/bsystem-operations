@@ -26,6 +26,8 @@ export function createEventsRouter(repository: OperationsRepository): Router {
       severity: parsed.data.severity,
       payload: parsed.data.payload,
       now,
+      eventId: parsed.data.eventId,
+      occurredAt: parsed.data.occurredAt,
     });
     repository.touchLastSeen(server.id, now);
     res.status(202).json({ status: 'accepted' });
