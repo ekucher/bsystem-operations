@@ -4,7 +4,7 @@ import { ConfigError, loadConfig, type AppConfig } from './config.js';
 import { openDb } from './db.js';
 import { OperationsRepository } from './repository.js';
 import { scheduleOfflineMonitor } from './offlineMonitor.js';
-import { scheduleRetentionCleanup } from './retention.js';
+import { schedulePendingKeyCleanup, scheduleRetentionCleanup } from './retention.js';
 
 // Fail fast with a readable message (not a stack trace, not a silent
 // NaN/undefined creeping into request handling) when the environment is
@@ -33,6 +33,7 @@ const app = createApp(repository, config, db);
 const retentionTimer = scheduleRetentionCleanup(repository, config.eventRetentionDays);
 const offlineTimer = scheduleOfflineMonitor(repository, config);
 const sessionTimer = scheduleSessionCleanup(repository);
+const pendingKeyTimer = schedulePendingKeyCleanup(repository);
 
 const server = app.listen(config.port, () => {
   // eslint-disable-next-line no-console
@@ -57,6 +58,7 @@ function shutdown(signal: NodeJS.Signals): void {
     clearInterval(offlineTimer);
   }
   clearInterval(sessionTimer);
+  clearInterval(pendingKeyTimer);
 
   server.close((err) => {
     if (err) {
