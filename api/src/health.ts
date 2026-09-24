@@ -21,9 +21,16 @@ const packageManifest = JSON.parse(
 // destroying a database file on disk — a test can hand this any Db
 // (including one whose handle has already been closed) and check the
 // return value directly.
+// Wave-2 C5: queries the application's actual schema (the servers table)
+// rather than a bare `SELECT 1`, which only proves the connection itself
+// is alive and says nothing about whether the real schema this process
+// depends on is present and queryable (e.g. a DB opened against the wrong
+// file, or one where migrations never ran). `LIMIT 1` keeps this cheap
+// and strictly read-only — no writes, no side effects — while still
+// forcing SQLite to actually execute a query against the table.
 export function isDbReady(db: Db): boolean {
   try {
-    db.prepare('SELECT 1').get();
+    db.prepare('SELECT id FROM servers LIMIT 1').get();
     return true;
   } catch {
     return false;

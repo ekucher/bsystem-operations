@@ -83,11 +83,15 @@ export function createAdminRouter(repository: OperationsRepository, config: AppC
     }
     const apiKey = generateApiKey();
     const now = new Date().toISOString();
-    const approved = repository.approveServer(server.id, apiKey, hashSecret(apiKey), now);
-    // Retrofit: approve didn't write an audit row before this hardening
-    // pass (Agent A/pre-existing code) — every lifecycle-changing admin
-    // action now does.
-    repository.recordAdminAction({ action: 'approve', serverId: server.id, adminUserId: req.authUser!.id, now });
+    // Wave-2 C3: state transition + audit row committed atomically (one
+    // db.transaction()) — see approveServerWithAudit in repository.ts.
+    const approved = repository.approveServerWithAudit({
+      id: server.id,
+      apiKey,
+      apiKeyHash: hashSecret(apiKey),
+      adminUserId: req.authUser!.id,
+      now,
+    });
     res.status(200).json({ status: approved?.status });
   });
 
@@ -112,18 +116,18 @@ export function createAdminRouter(repository: OperationsRepository, config: AppC
       return;
     }
     const now = new Date().toISOString();
-    const result = repository.revokeServer(server.id, now);
-    if (!result.changed || !result.server) {
-      res.status(409).json({ error: 'not_revocable', status: server.status });
-      return;
-    }
-    repository.recordAdminAction({
-      action: 'revoke',
-      serverId: server.id,
+    // Wave-2 C3: state transition + audit row committed atomically (one
+    // db.transaction()) — see revokeServerWithAudit in repository.ts.
+    const result = repository.revokeServerWithAudit({
+      id: server.id,
       adminUserId: req.authUser!.id,
       reason: parsed.data.reason,
       now,
     });
+    if (!result.changed || !result.server) {
+      res.status(409).json({ error: 'not_revocable', status: server.status });
+      return;
+    }
     res.status(200).json({ status: result.server.status });
   });
 
@@ -150,18 +154,20 @@ export function createAdminRouter(repository: OperationsRepository, config: AppC
     }
     const apiKey = generateApiKey();
     const now = new Date().toISOString();
-    const result = repository.reissueApiKey(server.id, apiKey, hashSecret(apiKey), now);
-    if (!result.changed || !result.server) {
-      res.status(409).json({ error: 'not_revocable', status: server.status });
-      return;
-    }
-    repository.recordAdminAction({
-      action: 'reissue',
-      serverId: server.id,
+    // Wave-2 C3: state transition + audit row committed atomically (one
+    // db.transaction()) — see reissueApiKeyWithAudit in repository.ts.
+    const result = repository.reissueApiKeyWithAudit({
+      id: server.id,
+      apiKey,
+      apiKeyHash: hashSecret(apiKey),
       adminUserId: req.authUser!.id,
       reason: parsed.data.reason,
       now,
     });
+    if (!result.changed || !result.server) {
+      res.status(409).json({ error: 'not_revocable', status: server.status });
+      return;
+    }
     res.status(200).json({ status: result.server.status, apiKey });
   });
 
