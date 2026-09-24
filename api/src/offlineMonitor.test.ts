@@ -213,6 +213,7 @@ describe('runOfflineCheck grace period for freshly-approved servers (D5)', () =>
       institutionCode: '01234567',
       productType: 'LIMS',
       hostname: 'HOUSE-LIMS-01',
+      claim: 'test-claim',
       now: isoMinutesAgo(5),
     });
     const approvedAt = new Date().toISOString();
@@ -238,6 +239,7 @@ describe('runOfflineCheck grace period for freshly-approved servers (D5)', () =>
       institutionCode: '01234567',
       productType: 'LIMS',
       hostname: 'HOUSE-LIMS-01',
+      claim: 'test-claim',
       now: isoMinutesAgo(200),
     });
     const approvedAt = isoMinutesAgo(200);
@@ -275,6 +277,7 @@ describe('scheduleOfflineMonitor single-flight guard (D6)', () => {
       institutionCode: '01234567',
       productType: 'LIMS',
       hostname: 'HOUSE-LIMS-01',
+      claim: 'test-claim',
       now: isoMinutesAgo(1000),
     });
     repository.approveServer(SERVER_ID, 'plain-key', 'hash', isoMinutesAgo(1000));

@@ -14,6 +14,7 @@ function setUpServer(repository: OperationsRepository): void {
     institutionCode: '01234567',
     productType: 'LIMS',
     hostname: 'HOUSE-LIMS-03',
+    claim: 'test-claim',
     now: iso(-1000),
   });
 }
