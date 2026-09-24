@@ -1,0 +1,4 @@
+# All commits on this repo to date are from a single owner (checked via
+# `git log --format='%an <%ae>' | sort -u`) — no team exists to invent an
+# entry for. Update this file if/when a second maintainer joins.
+* @ekucher
