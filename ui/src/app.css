@@ -190,6 +190,60 @@ main {
   color: #566573;
 }
 
+.badge-stage-ok {
+  background: #d5f5e3;
+  color: #1e8449;
+}
+
+.badge-stage-skipped {
+  background: #e5e7e9;
+  color: #566573;
+}
+
+.badge-stage-warning {
+  background: #fdebd0;
+  color: #b9770e;
+}
+
+.badge-stage-error,
+.badge-stage-fail {
+  background: #fadbd8;
+  color: #c0392b;
+}
+
+.badge-stage-warn {
+  background: #fdebd0;
+  color: #b9770e;
+}
+
+.event-details {
+  margin-top: 0.25rem;
+  margin-left: 1rem;
+}
+
+.event-details summary {
+  cursor: pointer;
+  color: #566573;
+}
+
+.event-stage-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.3rem 0 0.3rem 1rem;
+}
+
+.event-stage-list li {
+  padding: 0.15rem 0;
+}
+
+.event-details-json {
+  background: #f4f6f6;
+  padding: 0.5rem;
+  border-radius: 0.25rem;
+  overflow-x: auto;
+  font-size: 0.85em;
+}
+
 .category-status-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));

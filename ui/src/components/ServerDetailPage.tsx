@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ApiError, getServer } from '../api';
-import type { EventPayload, ServerDetail } from '../types';
+import type { EventPayload, EventStage, ServerDetail } from '../types';
 import { CATEGORY_LABELS } from './OverviewPage';
 
 interface ServerDetailPageProps {
@@ -140,11 +140,36 @@ export default function ServerDetailPage({ serverId, onBack }: ServerDetailPageP
       <ul className="event-timeline">
         {events.map((event) => {
           const payload = parsePayload(event.payload);
+          const stages = Array.isArray(payload.details?.stages) ? (payload.details!.stages as EventStage[]) : null;
+          const otherDetails = payload.details
+            ? Object.fromEntries(Object.entries(payload.details).filter(([key]) => key !== 'stages'))
+            : null;
+          const hasExpandable = Boolean(stages?.length) || Boolean(otherDetails && Object.keys(otherDetails).length > 0);
           return (
             <li key={event.id}>
               <span className={`badge badge-${event.severity.toLowerCase()}`}>{event.severity}</span>{' '}
-              <span className="muted">{formatTimestamp(event.created_at)}</span> — {event.category}:{' '}
-              {payload.message}
+              <span className="muted">{formatTimestamp(event.created_at)}</span> — {event.category}
+              {payload.component ? <span className="muted"> [{payload.component}]</span> : null}: {payload.message}
+              {hasExpandable && (
+                <details className="event-details">
+                  <summary>деталі{stages?.length ? ` (${stages.length} етапів)` : ''}</summary>
+                  {stages?.length ? (
+                    <ul className="event-stage-list">
+                      {stages.map((stage, index) => (
+                        <li key={index}>
+                          <span className={`badge badge-stage-${stage.status.toLowerCase()}`}>{stage.status}</span>{' '}
+                          {stage.name}
+                          {typeof stage.durationMs === 'number' ? ` — ${(stage.durationMs / 1000).toFixed(1)}с` : ''}
+                          {stage.details ? ` (${stage.details})` : ''}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {otherDetails && Object.keys(otherDetails).length > 0 && (
+                    <pre className="event-details-json">{JSON.stringify(otherDetails, null, 2)}</pre>
+                  )}
+                </details>
+              )}
             </li>
           );
         })}

@@ -10,6 +10,18 @@ export interface ServiceStatusEntry {
   status: ServiceRunState;
 }
 
+// Опційна структура всередині EventPayload.details.stages — надсилається
+// BRAVO.Archive (Write-BRAVOArchiveStep: OK/SKIPPED/WARNING/ERROR) і
+// BRAVO.Maintenance (BRAVOMaintenanceStepLog: OK/SKIPPED/WARN/FAIL) —
+// два різні словники статусів, не уніфіковані на боці агента. Не є
+// частиною EventRequest-схеми API (details лишається довільним record).
+export interface EventStage {
+  name: string;
+  status: 'OK' | 'SKIPPED' | 'WARNING' | 'ERROR' | 'WARN' | 'FAIL';
+  details?: string | null;
+  durationMs?: number | null;
+}
+
 export interface EventPayload {
   message: string;
   component?: string;
