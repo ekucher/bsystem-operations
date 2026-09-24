@@ -153,6 +153,17 @@ alerts-канал через `DISCORD_ALERTS_WEBHOOK_URL` при переход�
 перевірка heartbeat/events/офлайн-алертингу, критерії успіху перед
 розширенням на решту флоту.
 
+## CI та безпека репозиторію
+
+`.github/workflows/ci.yml` (`main`-push і кожен PR): typecheck/build/test
+для `api` і `ui`, лінтинг `api/docs/openapi.yaml`, `npm audit` +
+gitleaks secret-scanning, і реальний наскрізний `docker compose`-прогін
+(build обох образів, fail-closed перевірка без
+`OPERATIONS_BOOTSTRAP_SECRET`, login → `/auth/me` → `/admin/servers` →
+logout). Усі пʼять job'ів обов'язкові для merge у `main` — гілка захищена
+(`docs/REPOSITORY_GOVERNANCE.md` — деталі й спосіб змінити/перевірити).
+`SECURITY.md` — як повідомити про вразливість.
+
 ## Пов'язані джерела
 
 - Технічне завдання платформи BSYSTEM (Operations, §3.7) — визначає
