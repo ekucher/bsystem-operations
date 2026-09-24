@@ -266,6 +266,7 @@ describe('CSRF Origin check on mutating admin routes', () => {
     await request(app)
       .post('/api/v1/enroll')
       .set('X-Bootstrap-Secret', 'test-bootstrap-secret')
+      .set('X-Enrollment-Claim', generateTestClaim())
       .send({
         serverId,
         institutionCode: '01234567',
