@@ -3,20 +3,29 @@ export interface HeartbeatConfig {
   missedThreshold: number;
 }
 
-export type StaleLevel = 'ok' | 'warn' | 'critical';
+export type StaleLevel = 'ok' | 'warn' | 'critical' | 'never';
 
 // "Офлайн" (isOnline=false) вже означає, що минуло понад
 // expectedMinutes*missedThreshold відколи сервер востаннє відповів — та
 // сама умова, що бекенд використовує для isOnline. WARN тут завжди про
 // вже прострочені сервери; CRITICAL підвищує це до помітно довшого
 // мовчання (4x того ж вікна), щоб відрізнити щойно пропущений цикл від
-// справжнього тривалого збою.
+// справжнього тривалого збою. NEVER — окремий стан для підтвердженого
+// сервера, який ще жодного разу не надіслав heartbeat: він не є "ok"
+// (оператору варто це помітити), але це й не те саме прострочення, що
+// вимірюється відносно last_heartbeat_at, якого просто немає.
 export function computeStaleLevel(
   lastHeartbeatAt: string | null,
   isOnline: boolean,
   config: HeartbeatConfig | null,
 ): StaleLevel {
-  if (isOnline || !lastHeartbeatAt || !config) {
+  if (isOnline) {
+    return 'ok';
+  }
+  if (!lastHeartbeatAt) {
+    return 'never';
+  }
+  if (!config) {
     return 'ok';
   }
   const missedWindowMinutes = config.expectedMinutes * config.missedThreshold;

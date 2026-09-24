@@ -22,6 +22,33 @@ export interface EventStage {
   durationMs?: number | null;
 }
 
+const EVENT_STAGE_STATUSES: readonly string[] = ['OK', 'SKIPPED', 'WARNING', 'ERROR', 'WARN', 'FAIL'];
+
+// Runtime guard for `details.stages` entries: this JSON blob comes from a
+// third-party agent (BRAVO.Archive/Maintenance) over HTTP, not from a
+// schema the UI controls, so a malformed or future-shaped entry (missing
+// `name`/`status`, non-object array elements, unexpected status strings)
+// must be filtered out here rather than crash the page downstream.
+export function isEventStage(value: unknown): value is EventStage {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.name !== 'string' || typeof candidate.status !== 'string') {
+    return false;
+  }
+  if (!EVENT_STAGE_STATUSES.includes(candidate.status)) {
+    return false;
+  }
+  if (candidate.details !== undefined && candidate.details !== null && typeof candidate.details !== 'string') {
+    return false;
+  }
+  if (candidate.durationMs !== undefined && candidate.durationMs !== null && typeof candidate.durationMs !== 'number') {
+    return false;
+  }
+  return true;
+}
+
 export interface EventPayload {
   message: string;
   component?: string;
