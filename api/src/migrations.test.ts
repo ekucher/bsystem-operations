@@ -114,6 +114,24 @@ describe('runMigrations — upgrading an old-shape DB', () => {
 
     db.close();
   });
+
+  it('running migrations a second time immediately after the full old-shape upgrade is a clean no-op', () => {
+    const db = buildEtap1ShapeDb();
+    runMigrations(db);
+    const versionAfterFirst = db.pragma('user_version', { simple: true });
+    const columnsAfterFirst = tableColumns(db, 'servers');
+
+    expect(() => runMigrations(db)).not.toThrow();
+
+    expect(db.pragma('user_version', { simple: true })).toBe(versionAfterFirst);
+    expect(tableColumns(db, 'servers')).toEqual(columnsAfterFirst);
+    expect(tableNames(db).sort()).toEqual(['admin_actions', 'events', 'servers', 'sessions', 'users']);
+    // Pre-existing data still intact after the redundant second run.
+    const server = db.prepare('SELECT hostname FROM servers WHERE id = ?').get(SERVER_ID) as { hostname: string };
+    expect(server.hostname).toBe('HOUSE-LIMS-01');
+
+    db.close();
+  });
 });
 
 describe('runMigrations — fresh empty DB', () => {
@@ -127,6 +145,7 @@ describe('runMigrations — fresh empty DB', () => {
       institutionCode: '01234567',
       productType: 'VETOFFICE',
       hostname: 'HOUSE-VET-01',
+      claim: 'test-claim',
       now: '2026-01-01T00:00:00.000Z',
     });
     expect(result.outcome).toBe('created');
@@ -155,6 +174,71 @@ describe('runMigrations — idempotency', () => {
     // second run would have thrown on CREATE TABLE without IF NOT
     // EXISTS if steps had re-run).
     expect(tableNames(db).sort()).toEqual(['admin_actions', 'events', 'servers', 'sessions', 'users']);
+  });
+});
+
+describe('runMigrations — Wave-2 C1: legacy plaintext pending_api_key cleanup', () => {
+  it('clears a pre-migration-5 plaintext pending key (NULL expiry) and readPendingApiKey refuses it', () => {
+    const db = buildEtap1ShapeDb();
+    // Simulate a server that was approved under the OLD reveal-once
+    // model, before migration 5 introduced pending_api_key_expires_at:
+    // a plaintext pending_api_key with no expiry at all.
+    db.exec(
+      `UPDATE servers SET pending_api_key = 'legacy-plaintext-key-never-expires' WHERE id = '${SERVER_ID}'`,
+    );
+
+    runMigrations(db);
+
+    const row = db.prepare('SELECT pending_api_key, pending_api_key_expires_at FROM servers WHERE id = ?').get(SERVER_ID) as {
+      pending_api_key: string | null;
+      pending_api_key_expires_at: string | null;
+    };
+    expect(row.pending_api_key).toBeNull();
+    expect(row.pending_api_key_expires_at).toBeNull();
+
+    const repository = new OperationsRepository(db);
+    expect(repository.readPendingApiKey(SERVER_ID, '2026-01-01T00:00:00.000Z')).toBeUndefined();
+
+    db.close();
+  });
+
+  it('does not touch a pending key that already has a valid (non-NULL) expiry', () => {
+    const db = openDb(':memory:');
+    const repository = new OperationsRepository(db);
+    const serverId = '77777777-7777-4777-8777-777777777777';
+    repository.upsertPendingServer({
+      id: serverId,
+      institutionCode: '01234567',
+      productType: 'LIMS',
+      hostname: 'HOST-fresh',
+      claim: 'test-claim',
+      now: '2026-01-01T00:00:00.000Z',
+    });
+    const approved = repository.approveServer(serverId, 'plaintext-key', 'hash', '2026-01-01T00:00:00.000Z');
+    expect(approved?.pending_api_key).toBe('plaintext-key');
+    expect(approved?.pending_api_key_expires_at).not.toBeNull();
+
+    // Migrations already ran (openDb calls runMigrations); running again
+    // must not clear a well-formed, TTL-bounded pending key.
+    runMigrations(db);
+    expect(repository.getServer(serverId)?.pending_api_key).toBe('plaintext-key');
+  });
+});
+
+describe('runMigrations — Wave-2 C2: fail closed on a newer-than-supported schema version', () => {
+  it('throws immediately and applies no steps when user_version exceeds the latest known migration', () => {
+    const db = openDb(':memory:');
+    const latest = MIGRATIONS[MIGRATIONS.length - 1].version;
+    db.pragma(`user_version = ${latest + 1}`);
+
+    expect(() => runMigrations(db)).toThrow(
+      new RegExp(`Database schema version ${latest + 1} is newer than supported version ${latest}. Refusing to start\\.`),
+    );
+    // Version untouched by the failed attempt (not further bumped, not
+    // reset) and no migration steps ran (nothing to check for change here
+    // since every step is idempotent, but the version itself must stay
+    // exactly what it was).
+    expect(db.pragma('user_version', { simple: true })).toBe(latest + 1);
   });
 });
 

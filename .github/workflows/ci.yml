@@ -19,8 +19,8 @@ jobs:
     # hang as a real timeout rather than waiting the default 6 hours.
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm
@@ -39,8 +39,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm
@@ -60,8 +60,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
       - run: npx --yes @redocly/cli@1 lint
@@ -74,10 +74,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0 # gitleaks needs full history to scan past commits
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm
@@ -130,7 +130,7 @@ jobs:
     # rather than risk flaking on a slow runner.
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Negative case — compose refuses to start without OPERATIONS_BOOTSTRAP_SECRET
         # Proves Agent B's B1 fix (docker-compose.yml's
@@ -197,7 +197,21 @@ jobs:
       - name: Log in, call authenticated endpoints, log out
         run: |
           set -e
-          curl -sf -c cookies.txt -H 'Content-Type: application/json' \
+          # -H "Origin: ..." on every mutating (same-origin-required)
+          # request below: without an Origin header at all,
+          # requireSameOrigin() explicitly allows the request through
+          # ("absence of Origin isn't evidence of cross-site") — so a
+          # curl call with no Origin header never actually exercises that
+          # check, it just happens to succeed anyway. Origin must match
+          # the UI's mapped host port (docker-compose.yml's `ui` service
+          # publishes 8082:8080), which is also what these curl calls
+          # already target. Depends on Agent B's nginx Host-header
+          # forwarding fix for the Origin match to succeed in practice —
+          # see this job's own comment/report note if that hasn't landed
+          # yet in this worktree.
+          origin='http://localhost:8082'
+
+          curl -sf -c cookies.txt -H 'Content-Type: application/json' -H "Origin: $origin" \
             -d "{\"username\":\"ci-admin\",\"password\":\"$CI_ADMIN_PASSWORD\"}" \
             http://localhost:8082/api/v1/auth/login
 
@@ -208,7 +222,7 @@ jobs:
           servers="$(curl -sf -b cookies.txt http://localhost:8082/api/v1/admin/servers)"
           echo "$servers"
 
-          logout_status="$(curl -s -o /dev/null -w '%{http_code}' -b cookies.txt -X POST http://localhost:8082/api/v1/auth/logout)"
+          logout_status="$(curl -s -o /dev/null -w '%{http_code}' -b cookies.txt -H "Origin: $origin" -X POST http://localhost:8082/api/v1/auth/logout)"
           [ "$logout_status" = "204" ]
 
           # The session cookie must actually be gone: the same

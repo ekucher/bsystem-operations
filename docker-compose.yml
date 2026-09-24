@@ -32,6 +32,18 @@ services:
       # docker-compose.override.yml.example), not the base file.
       DISCORD_ALERTS_WEBHOOK_URL: "${DISCORD_ALERTS_WEBHOOK_URL:-}"
       OFFLINE_CHECK_INTERVAL_MINUTES: "${OFFLINE_CHECK_INTERVAL_MINUTES:-5}"
+      # These four are genuinely operator-tunable (api/src/config.ts has
+      # non-security defaults for all of them) but were previously only
+      # documented in api/.env.example (the no-Docker `npm run dev` file)
+      # — an operator setting them in the root .env had no effect because
+      # this file never forwarded them into the container. Same
+      # `${VAR:-default}` passthrough pattern as OFFLINE_CHECK_INTERVAL_MINUTES
+      # above, defaults matching config.ts's own so an unset root .env
+      # behaves identically to before this fix.
+      EVENT_RETENTION_DAYS: "${EVENT_RETENTION_DAYS:-90}"
+      HEARTBEAT_MISSED_THRESHOLD: "${HEARTBEAT_MISSED_THRESHOLD:-2}"
+      SESSION_TTL_HOURS: "${SESSION_TTL_HOURS:-24}"
+      HEARTBEAT_EXPECTED_INTERVAL_MINUTES: "${HEARTBEAT_EXPECTED_INTERVAL_MINUTES:-60}"
     volumes:
       - operations-data:/data
     restart: unless-stopped
